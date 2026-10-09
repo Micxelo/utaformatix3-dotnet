@@ -1,210 +1,204 @@
+using System.CommandLine;
 using UtaFormatix.Core.IO;
 using UtaFormatix.Core.Models;
 
-var sampleProject = new Project(
-    Format: Format.UfData,
-    Name: "Test Project",
-    Tracks:
-    [
-        new Track(
-            Id: 0,
-            Name: "Track 1",
-            Notes:
-            [
-                new Note(Id: 0, Key: 60, Lyric: "あ", TickOn: 0, TickOff: 480, Phoneme: "a"),
-                new Note(Id: 1, Key: 62, Lyric: "い", TickOn: 480, TickOff: 960, Phoneme: "i"),
-                new Note(Id: 2, Key: 64, Lyric: "う", TickOn: 960, TickOff: 1440),
-            ],
-            Pitch: new Pitch(
-                Data: [(0L, 60.0), (240L, 60.5), (480L, null)],
-                IsAbsolute: true)),
-        new Track(
-            Id: 1,
-            Name: "Track 2",
-            Notes:
-            [
-                new Note(Id: 0, Key: 48, Lyric: "ら", TickOn: 0, TickOff: 960),
-            ]),
-    ],
-    TimeSignatures:
-    [
-        new TimeSignature(MeasurePosition: 0, Numerator: 4, Denominator: 4),
-    ],
-    Tempos:
-    [
-        new Tempo(TickPosition: 0, Bpm: 120),
-        new Tempo(TickPosition: 3840, Bpm: 140),
-    ],
-    MeasurePrefix: 0,
-    ImportWarnings: []);
-
-Console.WriteLine("=== UtaFormatix3 .NET — UFDATA Round-trip Test ===");
-Console.WriteLine();
-
-Console.WriteLine($"Source project: \"{sampleProject.Name}\"");
-Console.WriteLine($"  Tracks: {sampleProject.Tracks.Count}");
-Console.WriteLine($"  Tempos: {sampleProject.Tempos.Count}");
-Console.WriteLine($"  Time signatures: {sampleProject.TimeSignatures.Count}");
-Console.WriteLine($"  Total notes: {sampleProject.Tracks.Sum(t => t.Notes.Count)}");
-Console.WriteLine();
-
-var (data, fileName, notifications) = UfData.Generate(sampleProject,
-    [new FeatureConfig.ConvertPitchConfig()]);
-
-Console.WriteLine($"Exported: {fileName} ({data.Length} bytes)");
-if (notifications.Count > 0)
-    Console.WriteLine($"  Notifications: {string.Join(", ", notifications.Select(n => n.GetType().Name))}");
-Console.WriteLine();
-
-var tempPath = Path.Combine(Path.GetTempPath(), fileName);
-File.WriteAllBytes(tempPath, data);
-Console.WriteLine($"Written to: {tempPath}");
-
-var loaded = UfData.ParseFile(tempPath);
-
-Console.WriteLine();
-Console.WriteLine($"Loaded project: \"{loaded.Name}\"");
-Console.WriteLine($"  Format: {loaded.Format.DisplayName}");
-Console.WriteLine($"  Tracks: {loaded.Tracks.Count}");
-Console.WriteLine($"  Tempos: {loaded.Tempos.Count}");
-Console.WriteLine($"  Time signatures: {loaded.TimeSignatures.Count}");
-Console.WriteLine($"  Total notes: {loaded.Tracks.Sum(t => t.Notes.Count)}");
-Console.WriteLine();
-
-var ok = true;
-
-if (loaded.Name != sampleProject.Name) { Console.WriteLine("FAIL: name mismatch"); ok = false; }
-if (loaded.Tracks.Count != sampleProject.Tracks.Count) { Console.WriteLine("FAIL: track count mismatch"); ok = false; }
-if (loaded.Tempos.Count != sampleProject.Tempos.Count) { Console.WriteLine("FAIL: tempo count mismatch"); ok = false; }
-if (loaded.TimeSignatures.Count != sampleProject.TimeSignatures.Count) { Console.WriteLine("FAIL: time sig count mismatch"); ok = false; }
-
-for (var i = 0; i < sampleProject.Tracks.Count; i++)
+var inputArg = new Argument<FileInfo?>("input")
 {
-    var src = sampleProject.Tracks[i];
-    var dst = loaded.Tracks[i];
-    if (src.Name != dst.Name) { Console.WriteLine($"FAIL: track {i} name mismatch"); ok = false; }
-    if (src.Notes.Count != dst.Notes.Count) { Console.WriteLine($"FAIL: track {i} note count mismatch"); ok = false; continue; }
-    for (var j = 0; j < src.Notes.Count; j++)
+    Description = "Input project file",
+    Arity = ArgumentArity.ZeroOrOne,
+};
+
+var outputOption = new Option<FileInfo?>("--output", ["-o"])
+{
+    Description = "Output file path (default: same directory, new extension)",
+};
+
+var formatOption = new Option<string?>("--output-format", ["-f"])
+{
+    Description = "Output format name or extension",
+};
+
+var simpleImportOption = new Option<bool>("--simple-import")
+{
+    Description = "Simple import (skip pitch/phonemes)",
+};
+
+var defaultLyricOption = new Option<string>("--default-lyric")
+{
+    Description = "Default lyric for empty notes",
+    DefaultValueFactory = _ => Constants.DefaultLyric,
+};
+
+var convertPitchOption = new Option<bool>("--convert-pitch")
+{
+    Description = "Enable pitch data conversion",
+};
+
+var convertPhonemesOption = new Option<bool>("--convert-phonemes")
+{
+    Description = "Enable phoneme conversion",
+};
+
+var fillRestsOption = new Option<int?>("--fill-rests")
+{
+    Description = "Fill slight rests between notes (denominator: 8/16/32/64/128)",
+};
+
+var japaneseLyricsOption = new Option<string[]>("--japanese-lyrics")
+{
+    Description = "Convert Japanese lyrics: <from> <to> (e.g., RomajiCv KanaCv)",
+    Arity = ArgumentArity.ExactlyOne,
+};
+
+var listFormatsOption = new Option<bool>("--list-formats")
+{
+    Description = "List all supported formats and exit",
+};
+
+var rootCommand = new RootCommand("UtaFormatix — Convert singing voice synthesizer project files")
+{
+    inputArg,
+    outputOption,
+    formatOption,
+    simpleImportOption,
+    defaultLyricOption,
+    convertPitchOption,
+    convertPhonemesOption,
+    fillRestsOption,
+    japaneseLyricsOption,
+    listFormatsOption,
+};
+
+rootCommand.SetAction(async (parseResult) =>
+{
+    var input = parseResult.GetValue(inputArg);
+    var output = parseResult.GetValue(outputOption);
+    var formatName = parseResult.GetValue(formatOption);
+    var simpleImport = parseResult.GetValue(simpleImportOption);
+    var defaultLyric = parseResult.GetValue(defaultLyricOption)!;
+    var convertPitch = parseResult.GetValue(convertPitchOption);
+    var convertPhonemes = parseResult.GetValue(convertPhonemesOption);
+    var fillRests = parseResult.GetValue(fillRestsOption);
+    var japaneseLyrics = parseResult.GetValue(japaneseLyricsOption);
+    var listFormats = parseResult.GetValue(listFormatsOption);
+
+    if (listFormats)
     {
-        var sn = src.Notes[j];
-        var dn = dst.Notes[j];
-        if (sn.Key != dn.Key || sn.TickOn != dn.TickOn || sn.TickOff != dn.TickOff
-            || sn.Lyric != dn.Lyric || sn.Phoneme != dn.Phoneme)
+        Console.WriteLine("Importable formats:");
+        foreach (var f in Format.Importable)
+            Console.WriteLine($"  {f.DisplayName,-20} .{f.Extension}");
+        Console.WriteLine();
+        Console.WriteLine("Exportable formats:");
+        foreach (var f in Format.Exportable)
+            Console.WriteLine($"  {f.DisplayName,-20} .{f.Extension}");
+        return;
+    }
+
+    if (input is null || !input.Exists)
+    {
+        Console.Error.WriteLine($"Error: input file not found: {input?.FullName ?? "(null)"}");
+        Environment.ExitCode = 1;
+        return;
+    }
+
+    var implementedImportFormats = new HashSet<string>([nameof(Format.UfData), nameof(Format.StandardMid)]);
+    var inputExt = input.Extension.TrimStart('.').ToLowerInvariant();
+    var inputFormat = Format.Importable.FirstOrDefault(f => f.MatchExtension(inputExt) && implementedImportFormats.Contains(f.Name))
+        ?? Format.Importable.FirstOrDefault(f => f.MatchExtension(inputExt));
+    if (inputFormat is null)
+    {
+        Console.Error.WriteLine($"Error: unsupported input format: .{inputExt}");
+        Environment.ExitCode = 1;
+        return;
+    }
+
+    Console.WriteLine($"Input:  {input.Name} ({inputFormat.DisplayName})");
+
+    var importParams = new ImportParams(
+        SimpleImport: simpleImport,
+        DefaultLyric: defaultLyric);
+
+    Project project;
+    try
+    {
+        project = inputFormat.Name switch
         {
-            Console.WriteLine($"FAIL: track {i} note {j} mismatch");
-            ok = false;
+            nameof(Format.UfData) => UfData.ParseFile(input.FullName, importParams),
+            nameof(Format.StandardMid) => StandardMid.Parse(input.FullName, importParams),
+            _ => throw new NotSupportedException($"Format '{inputFormat.DisplayName}' is not yet implemented."),
+        };
+    }
+    catch (Exception ex)
+    {
+        Console.Error.WriteLine($"Error reading input: {ex.Message}");
+        Environment.ExitCode = 1;
+        return;
+    }
+
+    Console.WriteLine($"  Tracks: {project.Tracks.Count}, Notes: {project.Tracks.Sum(t => t.Notes.Count)}, Tempos: {project.Tempos.Count}");
+
+    var outputFormat = ResolveOutputFormat(formatName, output, input, inputFormat);
+    if (outputFormat is null)
+    {
+        Console.Error.WriteLine("Error: could not determine output format. Use -f or -o with a recognized extension.");
+        Environment.ExitCode = 1;
+        return;
+    }
+
+    var features = new List<FeatureConfig>();
+    if (convertPitch && outputFormat.AvailableFeaturesForGeneration.Contains(Feature.ConvertPitch))
+        features.Add(new FeatureConfig.ConvertPitchConfig());
+
+    var outputPath = output?.FullName
+        ?? Path.Combine(input.DirectoryName ?? ".", outputFormat.GetFileName(project.Name));
+
+    Console.WriteLine($"Output: {Path.GetFileName(outputPath)} ({outputFormat.DisplayName})");
+
+    try
+    {
+        switch (outputFormat.Name)
+        {
+            case nameof(Format.UfData):
+                UfData.GenerateFile(project, outputPath, features);
+                break;
+            case nameof(Format.StandardMid):
+                StandardMid.GenerateFile(project, outputPath, features);
+                break;
+            default:
+                throw new NotSupportedException($"Output format '{outputFormat.DisplayName}' is not yet implemented.");
         }
     }
-}
-
-for (var i = 0; i < sampleProject.Tempos.Count; i++)
-{
-    if (sampleProject.Tempos[i].TickPosition != loaded.Tempos[i].TickPosition
-        || Math.Abs(sampleProject.Tempos[i].Bpm - loaded.Tempos[i].Bpm) > 0.001)
+    catch (Exception ex)
     {
-        Console.WriteLine($"FAIL: tempo {i} mismatch");
-        ok = false;
+        Console.Error.WriteLine($"Error writing output: {ex.Message}");
+        Environment.ExitCode = 1;
+        return;
     }
-}
 
-if (sampleProject.Tracks[0].Pitch is { } srcPitch)
+    Console.WriteLine("Done.");
+});
+
+var parseResult = rootCommand.Parse(args);
+return await parseResult.InvokeAsync();
+
+static Format? ResolveOutputFormat(string? formatName, FileInfo? output, FileInfo input, Format inputFormat)
 {
-    var lp = loaded.Tracks[0].Pitch;
-    if (lp is null)
+    var implementedExportFormats = new HashSet<string>([nameof(Format.UfData), nameof(Format.StandardMid)]);
+
+    if (!string.IsNullOrEmpty(formatName))
     {
-        Console.WriteLine("FAIL: pitch data lost");
-        ok = false;
+        return Format.Exportable.FirstOrDefault(f =>
+            string.Equals(f.Name, formatName, StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(f.DisplayName, formatName, StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(f.Extension, formatName, StringComparison.OrdinalIgnoreCase));
     }
-    else
+
+    if (output is not null)
     {
-        if (srcPitch.IsAbsolute != lp.IsAbsolute) { Console.WriteLine("FAIL: pitch isAbsolute mismatch"); ok = false; }
-        if (srcPitch.Data.Count != lp.Data.Count) { Console.WriteLine("FAIL: pitch data count mismatch"); ok = false; }
+        var ext = output.Extension.TrimStart('.').ToLowerInvariant();
+        return Format.Exportable.FirstOrDefault(f => f.MatchExtension(ext) && implementedExportFormats.Contains(f.Name))
+            ?? Format.Exportable.FirstOrDefault(f => f.MatchExtension(ext));
     }
+
+    return null;
 }
-
-File.Delete(tempPath);
-
-Console.WriteLine();
-if (ok)
-    Console.WriteLine("PASS — UFDATA round-trip verified.");
-else
-    Console.WriteLine("FAIL — see errors above.");
-
-Console.WriteLine();
-Console.WriteLine("=== Standard MIDI Round-trip Test ===");
-Console.WriteLine();
-
-var midiTempPath = Path.Combine(Path.GetTempPath(), "test.mid");
-StandardMid.GenerateFile(sampleProject, midiTempPath);
-Console.WriteLine($"Exported MIDI to: {midiTempPath}");
-
-var loadedMidi = StandardMid.Parse(midiTempPath);
-Console.WriteLine($"Loaded MIDI project: \"{loadedMidi.Name}\"");
-Console.WriteLine($"  Format: {loadedMidi.Format.DisplayName}");
-Console.WriteLine($"  Tracks: {loadedMidi.Tracks.Count}");
-Console.WriteLine($"  Tempos: {loadedMidi.Tempos.Count}");
-Console.WriteLine($"  Time signatures: {loadedMidi.TimeSignatures.Count}");
-Console.WriteLine($"  Total notes: {loadedMidi.Tracks.Sum(t => t.Notes.Count)}");
-Console.WriteLine();
-
-var midiOk = true;
-
-if (loadedMidi.Tracks.Count != sampleProject.Tracks.Count)
-{
-    Console.WriteLine("FAIL: track count mismatch");
-    midiOk = false;
-}
-else
-{
-    for (var i = 0; i < sampleProject.Tracks.Count; i++)
-    {
-        var src = sampleProject.Tracks[i];
-        var dst = loadedMidi.Tracks[i];
-        if (src.Notes.Count != dst.Notes.Count)
-        {
-            Console.WriteLine($"FAIL: track {i} note count mismatch (expected {src.Notes.Count}, got {dst.Notes.Count})");
-            midiOk = false;
-            continue;
-        }
-        for (var j = 0; j < src.Notes.Count; j++)
-        {
-            var sn = src.Notes[j];
-            var dn = dst.Notes[j];
-            if (sn.Key != dn.Key || sn.TickOn != dn.TickOn || sn.TickOff != dn.TickOff)
-            {
-                Console.WriteLine($"FAIL: track {i} note {j} mismatch");
-                Console.WriteLine($"  Expected: key={sn.Key} tickOn={sn.TickOn} tickOff={sn.TickOff}");
-                Console.WriteLine($"  Got:      key={dn.Key} tickOn={dn.TickOn} tickOff={dn.TickOff}");
-                midiOk = false;
-            }
-        }
-    }
-}
-
-if (loadedMidi.Tempos.Count != sampleProject.Tempos.Count)
-{
-    Console.WriteLine("FAIL: tempo count mismatch");
-    midiOk = false;
-}
-else
-{
-    for (var i = 0; i < sampleProject.Tempos.Count; i++)
-    {
-        if (sampleProject.Tempos[i].TickPosition != loadedMidi.Tempos[i].TickPosition
-            || Math.Abs(sampleProject.Tempos[i].Bpm - loadedMidi.Tempos[i].Bpm) > 0.01)
-        {
-            Console.WriteLine($"FAIL: tempo {i} mismatch");
-            midiOk = false;
-        }
-    }
-}
-
-File.Delete(midiTempPath);
-
-Console.WriteLine();
-if (midiOk)
-    Console.WriteLine("PASS — Standard MIDI round-trip verified.");
-else
-    Console.WriteLine("FAIL — see errors above.");
-
-return ok && midiOk ? 0 : 1;

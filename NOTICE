@@ -18,3 +18,7 @@ UtaFormatix.Data (https://github.com/sdercolin/utaformatix-data)
 Melanchall.DryWetMidi (https://github.com/melanchall/drywetmidi)
   Copyright melanchall
   Licensed under the MIT License
+
+System.CommandLine (https://github.com/dotnet/command-line-api)
+  Copyright .NET Foundation and contributors
+  Licensed under the MIT License
