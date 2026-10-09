@@ -40,8 +40,8 @@ internal static class PitchCalculation
 
             double? convertedValue = point.Value switch
             {
-                not null when toAbsolute => point.Value.Value - currentNoteKey,
-                not null when !toAbsolute => point.Value.Value == 0.0 ? 0.0 : point.Value.Value + currentNoteKey,
+                not null when pitch.IsAbsolute => point.Value.Value - currentNoteKey,
+                not null when !pitch.IsAbsolute => point.Value.Value == 0.0 ? null : point.Value.Value + currentNoteKey,
                 null => 0.0,
                 _ => point.Value
             };

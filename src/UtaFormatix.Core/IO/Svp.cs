@@ -462,12 +462,6 @@ public static class Svp
         {
             parameters["pitchDelta"] = pitchData;
         }
-        else
-        {
-            var existingPitchDelta = parameters["pitchDelta"]?.AsObject();
-            if (existingPitchDelta is not null)
-                existingPitchDelta["points"] = new JsonArray();
-        }
 
         var mainRef = newTrack["mainRef"]!.AsObject();
         mainRef["groupID"] = uuid;
