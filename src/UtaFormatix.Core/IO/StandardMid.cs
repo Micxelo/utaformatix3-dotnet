@@ -24,7 +24,7 @@ public static class StandardMid
         var (tempos, timeSignatures, tickPrefix) = ParseMasterTrack(tracks[0], tickRate, 0, warnings);
 
         var projectTracks = new List<Track>();
-        for (var i = 1; i < tracks.Length; i++)
+        for (var i = 0; i < tracks.Length; i++)
         {
             var track = ParseTrack(tracks[i], tickRate, tickPrefix, parameters);
             projectTracks.Add(track);

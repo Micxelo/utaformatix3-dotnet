@@ -57,9 +57,15 @@ public static class Vpr
         foreach (var trackNode in tracksNode)
         {
             if (trackNode == null) continue;
-            var track = ParseTrack(trackNode, trackIndex++);
+            var track = ParseTrack(trackNode, trackIndex++, importParams);
             tracks.Add(track);
         }
+
+        var warnings = new List<ImportWarning>();
+        if (tempos.Count == 0)
+            warnings.Add(new ImportWarning.TempoNotFound());
+        if (timeSignatures.Count == 0)
+            warnings.Add(new ImportWarning.TimeSignatureNotFound());
 
         return new Project(
             Format: Format.Vpr,
@@ -68,7 +74,7 @@ public static class Vpr
             TimeSignatures: timeSignatures.Count > 0 ? timeSignatures : [new TimeSignature(0, 4, 4)],
             Tempos: tempos.Count > 0 ? tempos : [new Tempo(0, 120)],
             MeasurePrefix: 1,
-            ImportWarnings: []);
+            ImportWarnings: warnings);
     }
 
     private static List<Tempo> ParseTempos(JsonNode? masterTrack)
@@ -111,7 +117,7 @@ public static class Vpr
         return timeSignatures;
     }
 
-    private static Track ParseTrack(JsonNode trackNode, int trackId)
+    private static Track ParseTrack(JsonNode trackNode, int trackId, ImportParams importParams)
     {
         var name = trackNode["name"]?.GetValue<string>() ?? "Untitled";
         var partsNode = trackNode["parts"]?.AsArray();
@@ -132,7 +138,7 @@ public static class Vpr
                     foreach (var noteNode in notesNode)
                     {
                         if (noteNode == null) continue;
-                        var note = ParseNote(noteNode, partPos, notes.Count);
+                        var note = ParseNote(noteNode, partPos, notes.Count, importParams);
                         notes.Add(note);
                     }
                 }
@@ -152,13 +158,16 @@ public static class Vpr
         return new Track(trackId, name, notes, pitch);
     }
 
-    private static Note ParseNote(JsonNode noteNode, long partPos, int id)
+    private static Note ParseNote(JsonNode noteNode, long partPos, int id, ImportParams importParams)
     {
         var pos = noteNode["pos"]?.GetValue<long>() ?? 0;
         var duration = noteNode["duration"]?.GetValue<long>() ?? 480;
         var number = noteNode["number"]?.GetValue<int>() ?? 60;
-        var lyric = noteNode["lyric"]?.GetValue<string>() ?? "la";
-        var phoneme = noteNode["phoneme"]?.GetValue<string>() ?? "a";
+        var lyric = noteNode["lyric"]?.GetValue<string>();
+        var phoneme = noteNode["phoneme"]?.GetValue<string>();
+
+        lyric = string.IsNullOrWhiteSpace(lyric) ? importParams.DefaultLyric : lyric;
+        phoneme = string.IsNullOrWhiteSpace(phoneme) ? "a" : phoneme;
 
         return new Note(
             Id: id,
@@ -278,6 +287,7 @@ public static class Vpr
         UpdateTimeSignatures(masterTrack, project.TimeSignatures);
 
         var tracksNode = root["tracks"]?.AsArray();
+        long endTick = 0;
         if (tracksNode != null && tracksNode.Count > 0)
         {
             var templateTrack = tracksNode[0];
@@ -287,11 +297,51 @@ public static class Vpr
             {
                 var trackNode = GenerateTrack(track, templateTrack, features);
                 tracksNode.Add(trackNode);
+
+                var partDuration = trackNode["parts"]?.AsArray()?[0]?["duration"]?.GetValue<long>() ?? 0;
+                endTick = Math.Max(endTick, partDuration);
             }
+        }
+
+        endTick = Math.Max(endTick, project.Tempos.Count > 0 ? project.Tempos.Max(t => t.TickPosition) : 0);
+        endTick = Math.Max(endTick, CalculateTimeSignatureEndTick(project.TimeSignatures));
+
+        var loopNode = masterTrack?["loop"];
+        if (loopNode != null)
+        {
+            loopNode["end"] = endTick;
         }
 
         var options = new JsonSerializerOptions { WriteIndented = true };
         return root.ToJsonString(options);
+    }
+
+    private static long CalculateTimeSignatureEndTick(List<TimeSignature> timeSignatures)
+    {
+        if (timeSignatures.Count == 0) return 0;
+
+        long tick = 0;
+        var lastTimeSig = timeSignatures[0];
+        var lastMeasure = lastTimeSig.MeasurePosition;
+
+        for (int i = 1; i <= timeSignatures.Count; i++)
+        {
+            var currentMeasure = i < timeSignatures.Count
+                ? timeSignatures[i].MeasurePosition
+                : lastMeasure + 4;
+
+            var measureCount = currentMeasure - lastMeasure;
+            var ticksPerMeasure = Constants.TicksInBeat * 4 * lastTimeSig.Numerator / lastTimeSig.Denominator;
+            tick += measureCount * ticksPerMeasure;
+
+            if (i < timeSignatures.Count)
+            {
+                lastTimeSig = timeSignatures[i];
+                lastMeasure = currentMeasure;
+            }
+        }
+
+        return tick;
     }
 
     private static void UpdateTempos(JsonNode? masterTrack, List<Tempo> tempos)
@@ -354,11 +404,11 @@ public static class Vpr
     private static JsonNode GeneratePart(Track track, JsonNode? templatePart, List<FeatureConfig> features)
     {
         var partNode = templatePart?.DeepClone() ?? new JsonObject();
-        partNode["pos"] = 0;
 
         var minTick = track.Notes.Count > 0 ? track.Notes.Min(n => n.TickOn) : 0;
         var maxTick = track.Notes.Count > 0 ? track.Notes.Max(n => n.TickOff) : 1920;
-        partNode["duration"] = maxTick - minTick;
+        partNode["pos"] = minTick;
+        partNode["duration"] = maxTick;
 
         var notesNode = partNode["notes"]?.AsArray();
         if (notesNode != null)
@@ -390,7 +440,7 @@ public static class Vpr
         {
             ["lyric"] = note.Lyric,
             ["phoneme"] = note.Phoneme,
-            ["isProtected"] = false,
+            ["isProtected"] = !string.IsNullOrEmpty(note.Phoneme),
             ["pos"] = note.TickOn - partPos,
             ["duration"] = note.TickOff - note.TickOn,
             ["number"] = note.Key,
