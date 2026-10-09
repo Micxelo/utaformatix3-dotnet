@@ -13,4 +13,8 @@
     <PackageReference Include="Melanchall.DryWetMidi" Version="8.0.3" />
   </ItemGroup>
 
+  <ItemGroup>
+    <EmbeddedResource Include="Resources\template.vprjson" />
+  </ItemGroup>
+
 </Project>
