@@ -1,0 +1,20 @@
+# Auto detect text files and perform LF normalization
+* text=auto
+
+# Source code
+*.cs      text diff=csharp
+*.csproj  text
+*.sln     text diff=csharp
+*.props   text
+*.targets text
+
+# Config
+.editorconfig text
+.gitattributes text
+.gitignore text
+
+# Binary / generated
+*.exe   binary
+*.dll   binary
+*.pdb   binary
+*.nupkg binary

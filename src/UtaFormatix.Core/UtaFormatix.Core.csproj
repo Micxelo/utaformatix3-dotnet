@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsAotCompatible>true</IsAotCompatible>
+    <RootNamespace>UtaFormatix.Core</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="UtaFormatix.Data" Version="1.0.1" />
+    <PackageReference Include="Melanchall.DryWetMidi" Version="8.0.3" />
+  </ItemGroup>
+
+</Project>

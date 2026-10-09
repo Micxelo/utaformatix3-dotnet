@@ -1,0 +1,6 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/UtaFormatix.App/UtaFormatix.App.csproj" />
+    <Project Path="src/UtaFormatix.Core/UtaFormatix.Core.csproj" />
+  </Folder>
+</Solution>
