@@ -24,9 +24,10 @@ public static class VocaloidMid
     private const int MinMeasureOffset = 1;
     private const int MaxMeasureOffset = 8;
 
-    public static Project Parse(string filePath, ImportParams? importParams = null)
+    public static Project Parse(string filePath, ImportParams? importParams = null, Format? format = null)
     {
         var parameters = importParams ?? new ImportParams();
+        var outputFormat = format ?? Format.VocaloidMid;
         var readingSettings = new ReadingSettings { TextEncoding = Latin1 };
         var midiFile = MidiFile.Read(filePath, readingSettings);
 
@@ -49,7 +50,7 @@ public static class VocaloidMid
         var tracks = tracksAsText.Select((text, i) => ParseTrack(text, i, tickPrefix, parameters)).ToList();
 
         return new Project(
-            Format: Format.VocaloidMid,
+            Format: outputFormat,
             Name: Path.GetFileNameWithoutExtension(filePath),
             Tracks: tracks,
             TimeSignatures: timeSignatures,
@@ -59,9 +60,10 @@ public static class VocaloidMid
     }
 
     public static (byte[] Data, string FileName, List<ExportNotification> Notifications) Generate(
-        Project project, IEnumerable<FeatureConfig>? features = null)
+        Project project, IEnumerable<FeatureConfig>? features = null, Format? format = null)
     {
         var featureList = features?.ToList() ?? [];
+        var outputFormat = format ?? Format.VocaloidMid;
         var projectFixed = project
             .LengthLimited(MaxVsqOutputTick)
             with { MeasurePrefix = project.MeasurePrefix.Clamp(MinMeasureOffset, MaxMeasureOffset) };
@@ -78,7 +80,7 @@ public static class VocaloidMid
         midiFile.Write(ms, MidiFileFormat.MultiTrack, writingSettings);
         var data = ms.ToArray();
 
-        var fileName = Format.VocaloidMid.GetFileName(projectFixed.Name);
+        var fileName = outputFormat.GetFileName(projectFixed.Name);
         var notifications = new List<ExportNotification>();
         if (!projectFixed.HasXSampaData)
             notifications.Add(new ExportNotification.PhonemeResetRequiredVsq());
@@ -91,9 +93,9 @@ public static class VocaloidMid
     }
 
     public static void GenerateFile(Project project, string filePath,
-        IEnumerable<FeatureConfig>? features = null)
+        IEnumerable<FeatureConfig>? features = null, Format? format = null)
     {
-        var (data, _, _) = Generate(project, features);
+        var (data, _, _) = Generate(project, features, format);
         File.WriteAllBytes(filePath, data);
     }
 
