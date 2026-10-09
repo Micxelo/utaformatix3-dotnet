@@ -194,7 +194,10 @@ public static class Vpr
 
         if (pitEvents == null || pitEvents.Count == 0) return null;
 
-        pbsEvents ??= [new VocaloidPartPitchData.Event(0, DefaultPitchBendSensitivity)];
+        if (pbsEvents == null || pbsEvents.Count == 0)
+        {
+            pbsEvents = [new VocaloidPartPitchData.Event(0, DefaultPitchBendSensitivity)];
+        }
 
         return new VocaloidPartPitchData(partPos, pitEvents, pbsEvents);
     }
