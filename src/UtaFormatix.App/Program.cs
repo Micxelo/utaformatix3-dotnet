@@ -101,7 +101,7 @@ rootCommand.SetAction(async (parseResult) =>
         return;
     }
 
-    var implementedImportFormats = new HashSet<string>([nameof(Format.UfData), nameof(Format.StandardMid), nameof(Format.VocaloidMid), nameof(Format.Vsq), nameof(Format.Vpr)]);
+    var implementedImportFormats = new HashSet<string>([nameof(Format.UfData), nameof(Format.StandardMid), nameof(Format.VocaloidMid), nameof(Format.Vsq), nameof(Format.Vsqx), nameof(Format.Vpr)]);
     var inputExt = input.Extension.TrimStart('.').ToLowerInvariant();
     var inputFormat = Format.Importable.FirstOrDefault(f => f.MatchExtension(inputExt) && implementedImportFormats.Contains(f.Name))
         ?? Format.Importable.FirstOrDefault(f => f.MatchExtension(inputExt));
@@ -127,6 +127,7 @@ rootCommand.SetAction(async (parseResult) =>
             nameof(Format.StandardMid) => StandardMid.Parse(input.FullName, importParams),
             nameof(Format.VocaloidMid) => VocaloidMid.Parse(input.FullName, importParams),
             nameof(Format.Vsq) => Vsq.Parse(input.FullName, importParams),
+            nameof(Format.Vsqx) => Vsqx.Parse(input.FullName, importParams),
             nameof(Format.Vpr) => Vpr.Parse(input.FullName, importParams),
             _ => throw new NotSupportedException($"Format '{inputFormat.DisplayName}' is not yet implemented."),
         };
@@ -173,6 +174,9 @@ rootCommand.SetAction(async (parseResult) =>
             case nameof(Format.Vsq):
                 Vsq.GenerateFile(project, outputPath, features);
                 break;
+            case nameof(Format.Vsqx):
+                Vsqx.GenerateFile(project, outputPath, features);
+                break;
             case nameof(Format.Vpr):
                 Vpr.GenerateFile(project, outputPath, features);
                 break;
@@ -195,7 +199,7 @@ return await parseResult.InvokeAsync();
 
 static Format? ResolveOutputFormat(string? formatName, FileInfo? output, FileInfo input, Format inputFormat)
 {
-    var implementedExportFormats = new HashSet<string>([nameof(Format.UfData), nameof(Format.StandardMid), nameof(Format.VocaloidMid), nameof(Format.Vsq), nameof(Format.Vpr)]);
+    var implementedExportFormats = new HashSet<string>([nameof(Format.UfData), nameof(Format.StandardMid), nameof(Format.VocaloidMid), nameof(Format.Vsq), nameof(Format.Vsqx), nameof(Format.Vpr)]);
 
     if (!string.IsNullOrEmpty(formatName))
     {
