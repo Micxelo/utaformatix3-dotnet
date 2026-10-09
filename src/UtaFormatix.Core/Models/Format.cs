@@ -95,7 +95,7 @@ public sealed class Format
         availableFeaturesForGeneration: [Feature.ConvertPitch, Feature.ConvertPhonemes]);
 
     public static readonly Format VocaloidMid = new(
-        nameof(VocaloidMid), "mid",
+        nameof(VocaloidMid), "vmid",
         possibleLyricsTypes: [JapaneseLyricsType.RomajiCv, JapaneseLyricsType.KanaCv],
         availableFeaturesForGeneration: [Feature.ConvertPitch],
         alias: "Mid (VOCALOID)");

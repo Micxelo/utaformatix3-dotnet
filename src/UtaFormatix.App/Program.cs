@@ -101,7 +101,7 @@ rootCommand.SetAction(async (parseResult) =>
         return;
     }
 
-    var implementedImportFormats = new HashSet<string>([nameof(Format.UfData), nameof(Format.StandardMid)]);
+    var implementedImportFormats = new HashSet<string>([nameof(Format.UfData), nameof(Format.StandardMid), nameof(Format.VocaloidMid)]);
     var inputExt = input.Extension.TrimStart('.').ToLowerInvariant();
     var inputFormat = Format.Importable.FirstOrDefault(f => f.MatchExtension(inputExt) && implementedImportFormats.Contains(f.Name))
         ?? Format.Importable.FirstOrDefault(f => f.MatchExtension(inputExt));
@@ -125,6 +125,7 @@ rootCommand.SetAction(async (parseResult) =>
         {
             nameof(Format.UfData) => UfData.ParseFile(input.FullName, importParams),
             nameof(Format.StandardMid) => StandardMid.Parse(input.FullName, importParams),
+            nameof(Format.VocaloidMid) => VocaloidMid.Parse(input.FullName, importParams),
             _ => throw new NotSupportedException($"Format '{inputFormat.DisplayName}' is not yet implemented."),
         };
     }
@@ -164,6 +165,9 @@ rootCommand.SetAction(async (parseResult) =>
             case nameof(Format.StandardMid):
                 StandardMid.GenerateFile(project, outputPath, features);
                 break;
+            case nameof(Format.VocaloidMid):
+                VocaloidMid.GenerateFile(project, outputPath, features);
+                break;
             default:
                 throw new NotSupportedException($"Output format '{outputFormat.DisplayName}' is not yet implemented.");
         }
@@ -183,7 +187,7 @@ return await parseResult.InvokeAsync();
 
 static Format? ResolveOutputFormat(string? formatName, FileInfo? output, FileInfo input, Format inputFormat)
 {
-    var implementedExportFormats = new HashSet<string>([nameof(Format.UfData), nameof(Format.StandardMid)]);
+    var implementedExportFormats = new HashSet<string>([nameof(Format.UfData), nameof(Format.StandardMid), nameof(Format.VocaloidMid)]);
 
     if (!string.IsNullOrEmpty(formatName))
     {
