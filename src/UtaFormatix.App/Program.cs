@@ -101,7 +101,7 @@ rootCommand.SetAction(async (parseResult) =>
         return;
     }
 
-    var implementedImportFormats = new HashSet<string>([nameof(Format.UfData), nameof(Format.StandardMid), nameof(Format.VocaloidMid), nameof(Format.Vsq), nameof(Format.Vsqx), nameof(Format.Vpr)]);
+    var implementedImportFormats = new HashSet<string>([nameof(Format.UfData), nameof(Format.StandardMid), nameof(Format.VocaloidMid), nameof(Format.Vsq), nameof(Format.Vsqx), nameof(Format.Vpr), nameof(Format.Svp)]);
     var inputExt = input.Extension.TrimStart('.').ToLowerInvariant();
     var inputFormat = Format.Importable.FirstOrDefault(f => f.MatchExtension(inputExt) && implementedImportFormats.Contains(f.Name))
         ?? Format.Importable.FirstOrDefault(f => f.MatchExtension(inputExt));
@@ -129,6 +129,7 @@ rootCommand.SetAction(async (parseResult) =>
             nameof(Format.Vsq) => Vsq.Parse(input.FullName, importParams),
             nameof(Format.Vsqx) => Vsqx.Parse(input.FullName, importParams),
             nameof(Format.Vpr) => Vpr.Parse(input.FullName, importParams),
+            nameof(Format.Svp) => Svp.Parse(input.FullName, importParams),
             _ => throw new NotSupportedException($"Format '{inputFormat.DisplayName}' is not yet implemented."),
         };
     }
@@ -152,6 +153,9 @@ rootCommand.SetAction(async (parseResult) =>
     var features = new List<FeatureConfig>();
     if (convertPitch && outputFormat.AvailableFeaturesForGeneration.Contains(Feature.ConvertPitch))
         features.Add(new FeatureConfig.ConvertPitchConfig());
+
+    if (outputFormat.AvailableFeaturesForGeneration.Contains(Feature.SplitProject))
+        features.Add(FeatureConfig.SplitProjectConfig.GetDefault(outputFormat));
 
     var outputPath = output?.FullName
         ?? Path.Combine(input.DirectoryName ?? ".", outputFormat.GetFileName(project.Name));
@@ -180,6 +184,9 @@ rootCommand.SetAction(async (parseResult) =>
             case nameof(Format.Vpr):
                 Vpr.GenerateFile(project, outputPath, features);
                 break;
+            case nameof(Format.Svp):
+                Svp.GenerateFile(project, outputPath, features);
+                break;
             default:
                 throw new NotSupportedException($"Output format '{outputFormat.DisplayName}' is not yet implemented.");
         }
@@ -199,7 +206,7 @@ return await parseResult.InvokeAsync();
 
 static Format? ResolveOutputFormat(string? formatName, FileInfo? output, FileInfo input, Format inputFormat)
 {
-    var implementedExportFormats = new HashSet<string>([nameof(Format.UfData), nameof(Format.StandardMid), nameof(Format.VocaloidMid), nameof(Format.Vsq), nameof(Format.Vsqx), nameof(Format.Vpr)]);
+    var implementedExportFormats = new HashSet<string>([nameof(Format.UfData), nameof(Format.StandardMid), nameof(Format.VocaloidMid), nameof(Format.Vsq), nameof(Format.Vsqx), nameof(Format.Vpr), nameof(Format.Svp)]);
 
     if (!string.IsNullOrEmpty(formatName))
     {
