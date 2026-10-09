@@ -126,8 +126,85 @@ File.Delete(tempPath);
 
 Console.WriteLine();
 if (ok)
-    Console.WriteLine("PASS — round-trip verified.");
+    Console.WriteLine("PASS — UFDATA round-trip verified.");
 else
     Console.WriteLine("FAIL — see errors above.");
 
-return ok ? 0 : 1;
+Console.WriteLine();
+Console.WriteLine("=== Standard MIDI Round-trip Test ===");
+Console.WriteLine();
+
+var midiTempPath = Path.Combine(Path.GetTempPath(), "test.mid");
+StandardMid.GenerateFile(sampleProject, midiTempPath);
+Console.WriteLine($"Exported MIDI to: {midiTempPath}");
+
+var loadedMidi = StandardMid.Parse(midiTempPath);
+Console.WriteLine($"Loaded MIDI project: \"{loadedMidi.Name}\"");
+Console.WriteLine($"  Format: {loadedMidi.Format.DisplayName}");
+Console.WriteLine($"  Tracks: {loadedMidi.Tracks.Count}");
+Console.WriteLine($"  Tempos: {loadedMidi.Tempos.Count}");
+Console.WriteLine($"  Time signatures: {loadedMidi.TimeSignatures.Count}");
+Console.WriteLine($"  Total notes: {loadedMidi.Tracks.Sum(t => t.Notes.Count)}");
+Console.WriteLine();
+
+var midiOk = true;
+
+if (loadedMidi.Tracks.Count != sampleProject.Tracks.Count)
+{
+    Console.WriteLine("FAIL: track count mismatch");
+    midiOk = false;
+}
+else
+{
+    for (var i = 0; i < sampleProject.Tracks.Count; i++)
+    {
+        var src = sampleProject.Tracks[i];
+        var dst = loadedMidi.Tracks[i];
+        if (src.Notes.Count != dst.Notes.Count)
+        {
+            Console.WriteLine($"FAIL: track {i} note count mismatch (expected {src.Notes.Count}, got {dst.Notes.Count})");
+            midiOk = false;
+            continue;
+        }
+        for (var j = 0; j < src.Notes.Count; j++)
+        {
+            var sn = src.Notes[j];
+            var dn = dst.Notes[j];
+            if (sn.Key != dn.Key || sn.TickOn != dn.TickOn || sn.TickOff != dn.TickOff)
+            {
+                Console.WriteLine($"FAIL: track {i} note {j} mismatch");
+                Console.WriteLine($"  Expected: key={sn.Key} tickOn={sn.TickOn} tickOff={sn.TickOff}");
+                Console.WriteLine($"  Got:      key={dn.Key} tickOn={dn.TickOn} tickOff={dn.TickOff}");
+                midiOk = false;
+            }
+        }
+    }
+}
+
+if (loadedMidi.Tempos.Count != sampleProject.Tempos.Count)
+{
+    Console.WriteLine("FAIL: tempo count mismatch");
+    midiOk = false;
+}
+else
+{
+    for (var i = 0; i < sampleProject.Tempos.Count; i++)
+    {
+        if (sampleProject.Tempos[i].TickPosition != loadedMidi.Tempos[i].TickPosition
+            || Math.Abs(sampleProject.Tempos[i].Bpm - loadedMidi.Tempos[i].Bpm) > 0.01)
+        {
+            Console.WriteLine($"FAIL: tempo {i} mismatch");
+            midiOk = false;
+        }
+    }
+}
+
+File.Delete(midiTempPath);
+
+Console.WriteLine();
+if (midiOk)
+    Console.WriteLine("PASS — Standard MIDI round-trip verified.");
+else
+    Console.WriteLine("FAIL — see errors above.");
+
+return ok && midiOk ? 0 : 1;
