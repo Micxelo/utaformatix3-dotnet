@@ -52,11 +52,21 @@ internal sealed class TickTimeTransformer
         return seg.Offset + (tick - seg.RangeStart) * seg.SecPerTick;
     }
 
+    public double TickToMilliSec(long tick) => TickToSec(tick) * 1000.0;
+
+    public double TickDistanceToSec(long tickStart, long tickEnd) =>
+        TickToSec(tickEnd) - TickToSec(tickStart);
+
+    public double TickDistanceToMilliSec(long tickStart, long tickEnd) =>
+        TickDistanceToSec(tickStart, tickEnd) * 1000.0;
+
     public long SecToTick(double sec)
     {
         var seg = _segments.LastOrDefault(s => s.Offset <= sec) ?? _segments[0];
         return (long)((sec - seg.Offset) / seg.SecPerTick) + seg.RangeStart;
     }
+
+    public long MilliSecToTick(double milliSec) => SecToTick(milliSec / 1000.0);
 
     private Segment FindSegmentForTick(long tick)
     {

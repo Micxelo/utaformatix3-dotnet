@@ -17,6 +17,27 @@ internal static class Interpolation
             return amp * Math.Cos(aFreq * (x - x0)) + yOffset;
         });
 
+    public static List<(long Tick, double Value)> InterpolateCosineEaseIn(
+        this List<(long Tick, double Value)> points, long samplingIntervalTick) =>
+        points.Interpolate(samplingIntervalTick, (x0, y0, x1, y1, x) =>
+        {
+            var yOffset = y1;
+            var aFreq = Math.PI / (x1 - x0) / 2.0;
+            var amp = y0 - y1;
+            return amp * Math.Cos(aFreq * (x - x0)) + yOffset;
+        });
+
+    public static List<(long Tick, double Value)> InterpolateCosineEaseOut(
+        this List<(long Tick, double Value)> points, long samplingIntervalTick) =>
+        points.Interpolate(samplingIntervalTick, (x0, y0, x1, y1, x) =>
+        {
+            var yOffset = y0;
+            var aFreq = Math.PI / (x1 - x0) / 2.0;
+            var amp = y0 - y1;
+            var phase = Math.PI / 2.0;
+            return amp * Math.Cos(aFreq * (x - x0) + phase) + yOffset;
+        });
+
     private static List<(long Tick, double Value)> Interpolate(
         this List<(long Tick, double Value)> points,
         long samplingIntervalTick,
