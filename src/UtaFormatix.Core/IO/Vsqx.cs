@@ -365,12 +365,14 @@ public static class Vsqx
         newNote.SetSingleChildValue(ns, tagNames.NoteNum, model.Key);
 
         var lyricElement = newNote.GetSingleElement(ns, tagNames.Lyric);
-        lyricElement.Value = model.Lyric;
+        lyricElement.RemoveAll();
+        lyricElement.Add(new XCData(model.Lyric));
 
         if (!string.IsNullOrEmpty(model.Phoneme))
         {
             var xSampaElement = newNote.GetSingleElement(ns, tagNames.XSampa);
-            xSampaElement.Value = model.Phoneme;
+            xSampaElement.RemoveAll();
+            xSampaElement.Add(new XCData(model.Phoneme));
             xSampaElement.SetAttributeValue(tagNames.XSampaLock, "1");
         }
 
@@ -390,8 +392,7 @@ public static class Vsqx
 
         var currentElement = emptyControl;
         var eventsWithName = pitchRawData.Pbs.Select(e => (e, Name: tagNames.PbsName))
-            .Concat(pitchRawData.Pit.Select(e => (e, Name: tagNames.PitName)))
-            .OrderBy(x => x.e.Pos)
+            .Concat(pitchRawData.Pit.Select(e => (e, Name: tagNames.PitName)).OrderBy(x => x.e.Pos))
             .ToList();
 
         foreach (var (evt, name) in eventsWithName)
