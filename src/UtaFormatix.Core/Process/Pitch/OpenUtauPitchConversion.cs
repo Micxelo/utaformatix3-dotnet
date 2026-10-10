@@ -224,7 +224,7 @@ internal static class OpenUtauPitchConversion
         if (data is null || data.Count == 0) return [];
 
         return data
-            .Select(p => (Tick: p.Tick, Value: Math.Round(p.Value * 100)))
+            .Select(p => (Tick: p.Tick, Value: Math.Round(p.Value * 100, MidpointRounding.AwayFromZero)))
             .ToList()
             .AppendPitchPointsForOpenUtauOutput()
             .ReduceRepeatedPitchPoints();
@@ -319,9 +319,19 @@ internal static class OpenUtauPitchConversion
             .GroupBy(p => p.Tick / interval * interval)
             .Select(g =>
             {
-                var keyPoint = g.FirstOrDefault(p => keyPointPositions.Contains(p.Tick));
-                return keyPoint != default
-                    ? (Tick: g.Key, Value: keyPoint.Value)
+                var hasKeyPoint = false;
+                double keyPointValue = 0;
+                foreach (var p in g)
+                {
+                    if (keyPointPositions.Contains(p.Tick))
+                    {
+                        hasKeyPoint = true;
+                        keyPointValue = p.Value;
+                        break;
+                    }
+                }
+                return hasKeyPoint
+                    ? (Tick: g.Key, Value: keyPointValue)
                     : (Tick: g.Key, Value: g.Average(p => p.Value));
             })
             .OrderBy(p => p.Tick)

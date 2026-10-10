@@ -314,7 +314,7 @@ public static class Ustx
             i == 0 ? new UstxDatum { X = d.X, Y = firstPitchPointValue, Shape = d.Shape }
                    : new UstxDatum { X = d.X, Y = d.Y, Shape = d.Shape }).ToList();
 
-        var lyric = thisNote.Phoneme is { Length: > 0 }
+        var lyric = !string.IsNullOrWhiteSpace(thisNote.Phoneme)
             ? $"{thisNote.Lyric} [{thisNote.Phoneme}]"
             : thisNote.Lyric;
 
