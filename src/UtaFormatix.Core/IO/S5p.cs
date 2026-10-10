@@ -136,7 +136,9 @@ public static class S5p
     {
         var parameters = trackNode["parameters"]?.AsObject();
         var pitchDelta = parameters?["pitchDelta"]?.AsArray();
-        if (pitchDelta is null || pitchDelta.Count == 0)
+        if (pitchDelta is null)
+            return new PitchModel([], IsAbsolute: false);
+        if (pitchDelta.Count == 0)
             return null;
 
         var interval = parameters?["interval"]?.GetValue<long>() ?? DefaultInterval;
