@@ -226,74 +226,8 @@ internal static class SynthVPitchConversion
 
     public static List<(long Tick, double Value)> AppendPitchPointsForSvpOutput(
         this List<(long Tick, double Value)> points) =>
-        AppendPitchPointsForInterpolation(points, SamplingIntervalTick)
+        PitchCalculation.AppendPitchPointsForInterpolation(points, SamplingIntervalTick)
             .ReduceRepeatedPitchPoints();
-
-    private static List<(long Tick, double Value)> AppendPitchPointsForInterpolation(
-        List<(long Tick, double Value)> points, long intervalTick)
-    {
-        if (points.Count == 0) return points;
-
-        var result = new List<(long Tick, double Value)> { points[0] };
-
-        for (var i = 0; i < points.Count - 1; i++)
-        {
-            var lastPoint = points[i];
-            var thisPoint = points[i + 1];
-            var tickDiff = thisPoint.Tick - lastPoint.Tick;
-
-            (long Tick, double Value)? newPoint = tickDiff switch
-            {
-                _ when tickDiff < intervalTick => null,
-                _ when tickDiff < 2 * intervalTick => ((thisPoint.Tick + lastPoint.Tick) / 2, lastPoint.Value),
-                _ => (thisPoint.Tick - intervalTick, lastPoint.Value),
-            };
-
-            if (newPoint is not null)
-                result.Add(newPoint.Value);
-            result.Add(thisPoint);
-        }
-
-        return result;
-    }
-
-    private static List<(long Tick, double Value)> ReduceRepeatedPitchPoints(
-        this List<(long Tick, double Value)> points)
-    {
-        var toBeRemoved = new HashSet<(long Tick, double Value)>();
-        double? currentRepeatedValue = null;
-        (long Tick, double Value)? prevPoint = null;
-
-        foreach (var point in points)
-        {
-            if (prevPoint is null)
-            {
-                prevPoint = point;
-                continue;
-            }
-
-            if (currentRepeatedValue is null)
-            {
-                if (prevPoint.Value.Value == point.Value)
-                    currentRepeatedValue = point.Value;
-                prevPoint = point;
-                continue;
-            }
-
-            if (currentRepeatedValue.Value == point.Value)
-            {
-                toBeRemoved.Add(prevPoint.Value);
-            }
-            else
-            {
-                currentRepeatedValue = null;
-            }
-
-            prevPoint = point;
-        }
-
-        return points.Where(p => !toBeRemoved.Contains(p)).ToList();
-    }
 
     private sealed record LongRange(long Start, long End);
 }

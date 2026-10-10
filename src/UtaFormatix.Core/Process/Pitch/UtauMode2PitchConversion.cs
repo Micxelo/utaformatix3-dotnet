@@ -281,7 +281,7 @@ internal static class UtauMode2PitchConversion
         };
     }
 
-    private static List<(long Tick, double Value)> AppendUtauNoteVibrato(
+    internal static List<(long Tick, double Value)> AppendUtauNoteVibrato(
         this List<(long Tick, double Value)> points,
         UtauNoteVibratoParams? vibratoParams,
         Note thisNote,

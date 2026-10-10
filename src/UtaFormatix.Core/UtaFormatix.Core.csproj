@@ -11,6 +11,7 @@
   <ItemGroup>
     <PackageReference Include="UtaFormatix.Data" Version="1.0.1" />
     <PackageReference Include="Melanchall.DryWetMidi" Version="8.0.3" />
+    <PackageReference Include="YamlDotNet" Version="18.1.0" />
   </ItemGroup>
 
   <ItemGroup>
@@ -18,6 +19,7 @@
     <EmbeddedResource Include="Resources\template.vsqx" />
     <EmbeddedResource Include="Resources\template.svp" />
     <EmbeddedResource Include="Resources\template.s5p" />
+    <EmbeddedResource Include="Resources\template.ustx" />
   </ItemGroup>
 
 </Project>
