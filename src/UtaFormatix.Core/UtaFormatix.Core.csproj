@@ -17,6 +17,7 @@
     <EmbeddedResource Include="Resources\template.vprjson" />
     <EmbeddedResource Include="Resources\template.vsqx" />
     <EmbeddedResource Include="Resources\template.svp" />
+    <EmbeddedResource Include="Resources\template.s5p" />
   </ItemGroup>
 
 </Project>
