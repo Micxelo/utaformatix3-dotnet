@@ -15,19 +15,18 @@ public static class StandardMid
 
         var ticksPerBeat = (midiFile.TimeDivision as TicksPerQuarterNoteTimeDivision)?.TicksPerQuarterNote
             ?? MidiUtil.StandardTimeDivision;
-        var tickRate = (double)ticksPerBeat / MidiUtil.StandardTimeDivision;
 
         var tracks = midiFile.GetTrackChunks().ToArray();
         if (tracks.Length == 0)
             throw new Exceptions.CannotReadFileException();
 
         var warnings = new List<ImportWarning>();
-        var (tempos, timeSignatures, tickPrefix) = ParseMasterTrack(tracks[0], tickRate, 0, warnings);
+        var (tempos, timeSignatures, tickPrefix) = ParseMasterTrack(tracks[0], ticksPerBeat, 0, warnings);
 
         var projectTracks = new List<Track>();
         for (var i = 0; i < tracks.Length; i++)
         {
-            var track = ParseTrack(tracks[i], i, tickRate, tickPrefix, parameters);
+            var track = ParseTrack(tracks[i], i, ticksPerBeat, tickPrefix, parameters);
             projectTracks.Add(track);
         }
 
@@ -87,27 +86,28 @@ public static class StandardMid
         EncodingDetector.Decode(Latin1.GetBytes(latin1Text));
 
     private static (List<Tempo> Tempos, List<TimeSignature> TimeSignatures, long TickPrefix)
-        ParseMasterTrack(TrackChunk masterTrack, double tickRate, int measurePrefix,
+        ParseMasterTrack(TrackChunk masterTrack, int timeDivision, int measurePrefix,
             List<ImportWarning> warnings)
     {
         var tempos = new List<Tempo>();
         var timeSignatures = new List<TimeSignature>();
-        var tickCounter = new TickCounter(tickRate);
+        // 整数换算语义（tickRate=1，传入标准 tick），避免浮点误差（见缺陷 4）。
+        var tickCounter = new TickCounter();
 
         long rawTick = 0;
         foreach (var evt in masterTrack.Events)
         {
             rawTick += evt.DeltaTime;
+            var tick = MidiUtil.ConvertTickTime(rawTick, timeDivision);
 
             if (evt is SetTempoEvent tempoEvt)
             {
-                var tick = (long)(rawTick / tickRate);
                 var bpm = MidiUtil.ConvertMidiTempoToBpm((long)tempoEvt.MicrosecondsPerQuarterNote);
                 tempos.Add(new Tempo(tick, bpm));
             }
             else if (evt is TimeSignatureEvent tsEvt)
             {
-                tickCounter.GoToTick(rawTick, tsEvt.Numerator, tsEvt.Denominator);
+                tickCounter.GoToTick(tick, tsEvt.Numerator, tsEvt.Denominator);
                 timeSignatures.Add(new TimeSignature(tickCounter.Measure, tsEvt.Numerator, tsEvt.Denominator));
             }
         }
@@ -138,7 +138,7 @@ public static class StandardMid
         return (shiftedTempos, shiftedTimeSignatures, tickPrefix);
     }
 
-    private static Track ParseTrack(TrackChunk trackChunk, int trackId, double tickRate, long tickPrefix,
+    private static Track ParseTrack(TrackChunk trackChunk, int trackId, int timeDivision, long tickPrefix,
         ImportParams parameters)
     {
         var trackName = $"Track {trackId + 1}";
@@ -151,7 +151,8 @@ public static class StandardMid
 
         foreach (var evt in trackChunk.Events)
         {
-            var delta = evt.DeltaTime;
+            // 整数换算到标准 480 division，避免浮点误差（见缺陷 4）。
+            var delta = MidiUtil.ConvertTickTime(evt.DeltaTime, timeDivision);
 
             if (delta > 0)
             {
@@ -168,7 +169,7 @@ public static class StandardMid
                     {
                         var cutNote = pending.Note with
                         {
-                            TickOff = tickPosition + (long)(delta / tickRate),
+                            TickOff = tickPosition + delta,
                             Lyric = pending.Lyric,
                         };
                         if (cutNote.Length > 0)
@@ -177,7 +178,7 @@ public static class StandardMid
                     pendingNotesWithLyric.Clear();
                 }
 
-                tickPosition += (long)(delta / tickRate);
+                tickPosition += delta;
                 pendingLyric = null;
             }
 
