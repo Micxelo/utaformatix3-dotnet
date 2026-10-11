@@ -89,8 +89,8 @@ public static class StandardMid
         ParseMasterTrack(TrackChunk masterTrack, int timeDivision, int measurePrefix,
             List<ImportWarning> warnings)
     {
-        var tempos = new List<Tempo>();
-        var timeSignatures = new List<TimeSignature>();
+        var rawTempos = new List<Tempo>();
+        var rawTimeSignatures = new List<TimeSignature>();
         // 整数换算语义（tickRate=1，传入标准 tick），避免浮点误差（见缺陷 4）。
         var tickCounter = new TickCounter();
 
@@ -103,39 +103,73 @@ public static class StandardMid
             if (evt is SetTempoEvent tempoEvt)
             {
                 var bpm = MidiUtil.ConvertMidiTempoToBpm((long)tempoEvt.MicrosecondsPerQuarterNote);
-                tempos.Add(new Tempo(tick, bpm));
+                rawTempos.Add(new Tempo(tick, bpm));
             }
             else if (evt is TimeSignatureEvent tsEvt)
             {
                 tickCounter.GoToTick(tick, tsEvt.Numerator, tsEvt.Denominator);
-                timeSignatures.Add(new TimeSignature(tickCounter.Measure, tsEvt.Numerator, tsEvt.Denominator));
+                rawTimeSignatures.Add(new TimeSignature(tickCounter.Measure, tsEvt.Numerator, tsEvt.Denominator));
             }
         }
 
-        var tickPrefix = tickCounter.Tick;
-        if (measurePrefix > 0)
+        if (rawTimeSignatures.Count == 0)
         {
-            tickCounter.GoToMeasure(0);
-            tickPrefix = tickCounter.Tick;
+            rawTimeSignatures.Add(new TimeSignature(0, 4, 4));
+            warnings.Add(new ImportWarning.TimeSignatureNotFound());
         }
 
-        var shiftedTempos = tempos
-            .Select(t => t with { TickPosition = t.TickPosition - tickPrefix })
-            .Where(t => t.TickPosition >= 0)
-            .ToList();
+        if (rawTempos.Count == 0)
+        {
+            rawTempos.Add(new Tempo(0, Constants.DefaultBpm));
+            warnings.Add(new ImportWarning.TempoNotFound());
+        }
 
-        var shiftedTimeSignatures = timeSignatures
-            .Where(ts => ts.MeasurePosition >= measurePrefix)
+        var tickPrefix = GetTickPrefix(rawTimeSignatures, measurePrefix);
+
+        // 删除前缀内拍号，保留最后一个作为首个（与 Kotlin 的 prefix 折叠一致）
+        var timeSignatures = rawTimeSignatures
             .Select(ts => ts with { MeasurePosition = ts.MeasurePosition - measurePrefix })
             .ToList();
+        var firstTimeSignatureIndex = timeSignatures
+            .Select((ts, i) => (ts, i))
+            .Where(x => x.ts.MeasurePosition <= 0)
+            .Select(x => (int?)x.i)
+            .LastOrDefault() ?? -1;
+        for (var i = 0; i < firstTimeSignatureIndex; i++)
+        {
+            warnings.Add(new ImportWarning.TimeSignatureIgnoredInPreMeasure(timeSignatures[0]));
+            timeSignatures.RemoveAt(0);
+        }
+        if (timeSignatures.Count > 0)
+            timeSignatures[0] = timeSignatures[0] with { MeasurePosition = 0 };
 
-        if (shiftedTimeSignatures.Count == 0 || shiftedTimeSignatures[0].MeasurePosition != 0)
-            shiftedTimeSignatures.Insert(0, new TimeSignature(0, 4, 4));
+        // 删除前缀内 tempo，保留最后一个作为首个（与 Kotlin 的 prefix 折叠一致）
+        var tempos = rawTempos
+            .Select(t => t with { TickPosition = t.TickPosition - tickPrefix })
+            .ToList();
+        var firstTempoIndex = tempos
+            .Select((t, i) => (t, i))
+            .Where(x => x.t.TickPosition <= 0)
+            .Select(x => (int?)x.i)
+            .LastOrDefault() ?? -1;
+        for (var i = 0; i < firstTempoIndex; i++)
+        {
+            warnings.Add(new ImportWarning.TempoIgnoredInPreMeasure(tempos[0]));
+            tempos.RemoveAt(0);
+        }
+        if (tempos.Count > 0)
+            tempos[0] = tempos[0] with { TickPosition = 0 };
 
-        if (shiftedTempos.Count == 0)
-            warnings.Add(new ImportWarning.TempoNotFound());
+        return (tempos, timeSignatures, tickPrefix);
+    }
 
-        return (shiftedTempos, shiftedTimeSignatures, tickPrefix);
+    private static long GetTickPrefix(List<TimeSignature> timeSignatures, int measurePrefix)
+    {
+        var counter = new TickCounter();
+        foreach (var ts in timeSignatures.Where(ts => ts.MeasurePosition < measurePrefix))
+            counter.GoToMeasure(ts);
+        counter.GoToMeasure(measurePrefix);
+        return counter.Tick;
     }
 
     private static Track ParseTrack(TrackChunk trackChunk, int trackId, int timeDivision, long tickPrefix,
