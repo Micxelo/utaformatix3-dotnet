@@ -190,26 +190,22 @@ public static class StandardMid
 
             if (delta > 0)
             {
+                // 与 Kotlin 一致：仅在 pendingNoteHead 的 channel 上做切分——若该
+                // channel 已有未结束音符则先按当前时间+delta 切分，再存入新音符。
                 if (pendingNoteHead is { } noteHead)
                 {
-                    var lyric = pendingLyric ?? defaultLyric;
-                    pendingNotesWithLyric[noteHead.Channel] = (noteHead.Note, lyric);
-                    pendingNoteHead = null;
-                }
-
-                if (pendingLyric != null)
-                {
-                    foreach (var (channel, pending) in pendingNotesWithLyric)
+                    if (pendingNotesWithLyric.TryGetValue(noteHead.Channel, out var existing))
                     {
-                        var cutNote = pending.Note with
+                        var cutNote = existing.Note with
                         {
                             TickOff = tickPosition + delta,
-                            Lyric = pending.Lyric,
+                            Lyric = existing.Lyric,
                         };
                         if (cutNote.Length > 0)
                             notes.Add(cutNote);
                     }
-                    pendingNotesWithLyric.Clear();
+                    pendingNotesWithLyric[noteHead.Channel] = (noteHead.Note, pendingLyric ?? defaultLyric);
+                    pendingNoteHead = null;
                 }
 
                 tickPosition += delta;
@@ -231,24 +227,12 @@ public static class StandardMid
                     break;
 
                 case NoteOnEvent noteOnEvt when noteOnEvt.Velocity == 0:
-                {
-                    var channel = (byte)noteOnEvt.Channel;
-                    if (pendingNotesWithLyric.TryGetValue(channel, out var pending))
-                    {
-                        var finalNote = pending.Note with { TickOff = tickPosition, Lyric = pending.Lyric };
-                        if (finalNote.Length > 0)
-                            notes.Add(finalNote);
-                        pendingNotesWithLyric.Remove(channel);
-                    }
-                    else if (pendingNoteHead is { } head && head.Channel == channel)
-                    {
-                        var finalNote = head.Note with { TickOff = tickPosition };
-                        if (finalNote.Length > 0)
-                            notes.Add(finalNote);
-                        pendingNoteHead = null;
-                    }
+                    CloseNote((byte)noteOnEvt.Channel);
                     break;
-                }
+
+                case NoteOffEvent noteOffEvt:
+                    CloseNote((byte)noteOffEvt.Channel);
+                    break;
 
                 case NoteOnEvent noteOnEvt:
                 {
@@ -261,26 +245,18 @@ public static class StandardMid
                     pendingNoteHead = (note, (byte)noteOnEvt.Channel);
                     break;
                 }
+            }
+        }
 
-                case NoteOffEvent noteOffEvt:
-                {
-                    var channel = (byte)noteOffEvt.Channel;
-                    if (pendingNotesWithLyric.TryGetValue(channel, out var pending))
-                    {
-                        var finalNote = pending.Note with { TickOff = tickPosition, Lyric = pending.Lyric };
-                        if (finalNote.Length > 0)
-                            notes.Add(finalNote);
-                        pendingNotesWithLyric.Remove(channel);
-                    }
-                    else if (pendingNoteHead is { } head && head.Channel == channel)
-                    {
-                        var finalNote = head.Note with { TickOff = tickPosition };
-                        if (finalNote.Length > 0)
-                            notes.Add(finalNote);
-                        pendingNoteHead = null;
-                    }
-                    break;
-                }
+        // 结束某通道的挂起音符（note-off，或 velocity=0 的 note-on）。
+        void CloseNote(byte channel)
+        {
+            if (pendingNotesWithLyric.TryGetValue(channel, out var pending))
+            {
+                var finalNote = pending.Note with { TickOff = tickPosition, Lyric = pending.Lyric };
+                if (finalNote.Length > 0)
+                    notes.Add(finalNote);
+                pendingNotesWithLyric.Remove(channel);
             }
         }
 
