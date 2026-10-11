@@ -26,7 +26,7 @@ public static class StandardMid
         var projectTracks = new List<Track>();
         for (var i = 0; i < tracks.Length; i++)
         {
-            var track = ParseTrack(tracks[i], tickRate, tickPrefix, parameters);
+            var track = ParseTrack(tracks[i], i, tickRate, tickPrefix, parameters);
             projectTracks.Add(track);
         }
 
@@ -119,10 +119,10 @@ public static class StandardMid
         return (shiftedTempos, shiftedTimeSignatures, tickPrefix);
     }
 
-    private static Track ParseTrack(TrackChunk trackChunk, double tickRate, long tickPrefix,
+    private static Track ParseTrack(TrackChunk trackChunk, int trackId, double tickRate, long tickPrefix,
         ImportParams parameters)
     {
-        var trackName = "Track";
+        var trackName = $"Track {trackId + 1}";
         var notes = new List<Note>();
         var pendingLyric = (string?)null;
         (Note Note, byte Channel)? pendingNoteHead = null;
