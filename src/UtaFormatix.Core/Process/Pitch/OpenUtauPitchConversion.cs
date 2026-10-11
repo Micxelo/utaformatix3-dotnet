@@ -224,7 +224,7 @@ internal static class OpenUtauPitchConversion
         if (data is null || data.Count == 0) return [];
 
         return data
-            .Select(p => (Tick: p.Tick, Value: Math.Round(p.Value * 100, MidpointRounding.AwayFromZero)))
+            .Select(p => (Tick: p.Tick, Value: Math.Round(p.Value * 100, MidpointRounding.ToPositiveInfinity)))
             .ToList()
             .AppendPitchPointsForOpenUtauOutput()
             .ReduceRepeatedPitchPoints();
@@ -357,16 +357,8 @@ internal static class OpenUtauPitchConversion
     }
 
     private static List<(long Tick, double Value)> ResampledSimple(
-        List<(long Tick, double Value)> points, long interval)
-    {
-        if (points.Count == 0) return [];
-
-        return points
-            .GroupBy(p => p.Tick / interval * interval)
-            .Select(g => (Tick: g.Key, Value: g.Average(p => p.Value)))
-            .OrderBy(p => p.Tick)
-            .ToList();
-    }
+        List<(long Tick, double Value)> points, long interval) =>
+        Resampled(points, interval, []);
 
     private static List<(long Tick, double Value)> AppendPitchPointsForOpenUtauOutput(
         this List<(long Tick, double Value)> points) =>
