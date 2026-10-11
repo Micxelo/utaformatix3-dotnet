@@ -72,7 +72,8 @@ public static class VocaloidMid
         if (projectFixed.Tracks.Count == 0)
             throw new EmptyProjectException();
 
-        var midiFile = GenerateMidiFile(projectFixed, featureList);
+        // mixer 段按 Kotlin 行为使用尚未移除空轨的原始工程轨道数。
+        var midiFile = GenerateMidiFile(projectFixed, project, featureList);
         midiFile.TimeDivision = new TicksPerQuarterNoteTimeDivision(MidiUtil.StandardTimeDivision);
 
         using var ms = new MemoryStream();
@@ -323,12 +324,12 @@ public static class VocaloidMid
             [new VocaloidPartPitchData(0, pit, pbs)]);
     }
 
-    private static MidiFile GenerateMidiFile(Project project, List<FeatureConfig> features)
+    private static MidiFile GenerateMidiFile(Project project, Project mixerProject, List<FeatureConfig> features)
     {
         var tickPrefix = Constants.TicksInFullNote * project.TimeSignatures[0].Numerator / project.TimeSignatures[0].Denominator * project.MeasurePrefix;
 
         var masterTrack = GenerateMasterTrack(project, tickPrefix);
-        var noteTracks = project.Tracks.Select(t => GenerateTrack(t, tickPrefix, project.MeasurePrefix, project, features)).ToList();
+        var noteTracks = project.Tracks.Select(t => GenerateTrack(t, tickPrefix, project.MeasurePrefix, mixerProject, features)).ToList();
 
         var chunks = new List<TrackChunk> { masterTrack };
         chunks.AddRange(noteTracks);
@@ -381,12 +382,12 @@ public static class VocaloidMid
     }
 
     private static TrackChunk GenerateTrack(Track track, long tickPrefix, int measurePrefix,
-        Project project, List<FeatureConfig> features)
+        Project mixerProject, List<FeatureConfig> features)
     {
         var events = new List<MidiEvent>();
         events.Add(new SequenceTrackNameEvent(track.Name));
 
-        var trackText = GenerateTrackText(track, tickPrefix, measurePrefix, project, features);
+        var trackText = GenerateTrackText(track, tickPrefix, measurePrefix, mixerProject, features);
         var shiftJisBytes = ShiftJis.GetBytes(trackText);
 
         var textEvents = new List<byte[]>();
