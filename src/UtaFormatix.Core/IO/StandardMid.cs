@@ -1,3 +1,4 @@
+using System.Text;
 using Melanchall.DryWetMidi.Common;
 using Melanchall.DryWetMidi.Core;
 using UtaFormatix.Core.Models;
@@ -10,7 +11,7 @@ public static class StandardMid
     public static Project Parse(string filePath, ImportParams? importParams = null)
     {
         var parameters = importParams ?? new ImportParams();
-        var midiFile = MidiFile.Read(filePath);
+        var midiFile = MidiFile.Read(filePath, StandardMidReadingSettings);
 
         var ticksPerBeat = (midiFile.TimeDivision as TicksPerQuarterNoteTimeDivision)?.TicksPerQuarterNote
             ?? MidiUtil.StandardTimeDivision;
@@ -53,7 +54,8 @@ public static class StandardMid
         var midiFile = GenerateMidiFile(project);
         midiFile.TimeDivision = new TicksPerQuarterNoteTimeDivision(MidiUtil.StandardTimeDivision);
         using var ms = new MemoryStream();
-        midiFile.Write(ms, MidiFileFormat.MultiTrack);
+        const MidiFileFormat format = MidiFileFormat.MultiTrack;
+        midiFile.Write(ms, format, StandardMidWritingSettings);
         var data = ms.ToArray();
         var fileName = Format.StandardMid.GetFileName(project.Name);
         return (data, fileName, []);
@@ -64,8 +66,25 @@ public static class StandardMid
     {
         var midiFile = GenerateMidiFile(project);
         midiFile.TimeDivision = new TicksPerQuarterNoteTimeDivision(MidiUtil.StandardTimeDivision);
-        midiFile.Write(filePath, overwriteFile: true, MidiFileFormat.MultiTrack);
+        midiFile.Write(filePath, overwriteFile: true, MidiFileFormat.MultiTrack, StandardMidWritingSettings);
     }
+
+    private static readonly WritingSettings StandardMidWritingSettings = new()
+    {
+        TextEncoding = Encoding.UTF8,
+    };
+
+    private static readonly Encoding Latin1 = Encoding.GetEncoding(28591);
+
+    // 读取标准 MIDI 时先按 Latin-1 逐字节解码，保留原始字节；再经
+    // EncodingDetector 自动识别编码（UTF-8/Shift_JIS/…），与 Kotlin 的 detect 一致。
+    private static readonly ReadingSettings StandardMidReadingSettings = new()
+    {
+        TextEncoding = Latin1,
+    };
+
+    private static string DecodeText(string latin1Text) =>
+        EncodingDetector.Decode(Latin1.GetBytes(latin1Text));
 
     private static (List<Tempo> Tempos, List<TimeSignature> TimeSignatures, long TickPrefix)
         ParseMasterTrack(TrackChunk masterTrack, double tickRate, int measurePrefix,
@@ -147,7 +166,11 @@ public static class StandardMid
                 {
                     foreach (var (channel, pending) in pendingNotesWithLyric)
                     {
-                        var cutNote = pending.Note with { TickOff = tickPosition + (long)(delta / tickRate) };
+                        var cutNote = pending.Note with
+                        {
+                            TickOff = tickPosition + (long)(delta / tickRate),
+                            Lyric = pending.Lyric,
+                        };
                         if (cutNote.Length > 0)
                             notes.Add(cutNote);
                     }
@@ -161,15 +184,15 @@ public static class StandardMid
             switch (evt)
             {
                 case LyricEvent lyricEvt:
-                    pendingLyric = lyricEvt.Text;
+                    pendingLyric = DecodeText(lyricEvt.Text);
                     break;
 
                 case TextEvent textEvt when pendingLyric is null:
-                    pendingLyric = textEvt.Text;
+                    pendingLyric = DecodeText(textEvt.Text);
                     break;
 
                 case SequenceTrackNameEvent nameEvt:
-                    trackName = nameEvt.Text;
+                    trackName = DecodeText(nameEvt.Text);
                     break;
 
                 case NoteOnEvent noteOnEvt when noteOnEvt.Velocity == 0:
