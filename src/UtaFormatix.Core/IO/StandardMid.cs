@@ -38,7 +38,7 @@ public static class StandardMid
 
         return new Project(
             Format: Format.StandardMid,
-            Name: Path.GetFileNameWithoutExtension(filePath),
+            Name: Path.GetFileName(filePath),
             Tracks: projectTracks.Select((t, i) => t with { Id = i }).ToList(),
             TimeSignatures: timeSignatures.Count > 0 ? timeSignatures : [new TimeSignature(0, 4, 4)],
             Tempos: tempos.Count > 0 ? tempos : [new Tempo(0, Constants.DefaultBpm)],
