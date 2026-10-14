@@ -55,6 +55,11 @@ var listFormatsOption = new Option<bool>("--list-formats")
     Description = "List all supported formats and exit",
 };
 
+var splitProjectOption = new Option<int?>("--split-project")
+{
+    Description = "Max tracks per output file (split multi-track projects); omit to keep a single file",
+};
+
 var rootCommand = new RootCommand("UtaFormatix — Convert singing voice synthesizer project files")
 {
     inputArg,
@@ -67,6 +72,7 @@ var rootCommand = new RootCommand("UtaFormatix — Convert singing voice synthes
     fillRestsOption,
     japaneseLyricsOption,
     listFormatsOption,
+    splitProjectOption,
 };
 
 rootCommand.SetAction(async (parseResult) =>
@@ -81,6 +87,7 @@ rootCommand.SetAction(async (parseResult) =>
     var fillRests = parseResult.GetValue(fillRestsOption);
     var japaneseLyrics = parseResult.GetValue(japaneseLyricsOption);
     var listFormats = parseResult.GetValue(listFormatsOption);
+    var splitProject = parseResult.GetValue(splitProjectOption);
 
     if (listFormats)
     {
@@ -91,14 +98,13 @@ rootCommand.SetAction(async (parseResult) =>
         Console.WriteLine("Exportable formats:");
         foreach (var f in Format.Exportable)
             Console.WriteLine($"  {f.DisplayName,-20} .{f.Extension}");
-        return;
+        return 0;
     }
 
     if (input is null || !input.Exists)
     {
         Console.Error.WriteLine($"Error: input file not found: {input?.FullName ?? "(null)"}");
-        Environment.ExitCode = 1;
-        return;
+        return 1;
     }
 
     var implementedImportFormats = new HashSet<string>([nameof(Format.UfData), nameof(Format.StandardMid), nameof(Format.VocaloidMid), nameof(Format.Vsq), nameof(Format.Vsqx), nameof(Format.Vpr), nameof(Format.Svp), nameof(Format.S5p), nameof(Format.Ust), nameof(Format.Ustx)]);
@@ -108,8 +114,7 @@ rootCommand.SetAction(async (parseResult) =>
     if (inputFormat is null)
     {
         Console.Error.WriteLine($"Error: unsupported input format: .{inputExt}");
-        Environment.ExitCode = 1;
-        return;
+        return 1;
     }
 
     Console.WriteLine($"Input:  {input.Name} ({inputFormat.DisplayName})");
@@ -139,8 +144,7 @@ rootCommand.SetAction(async (parseResult) =>
     catch (Exception ex)
     {
         Console.Error.WriteLine($"Error reading input: {ex.Message}");
-        Environment.ExitCode = 1;
-        return;
+        return 1;
     }
 
     Console.WriteLine($"  Tracks: {project.Tracks.Count}, Notes: {project.Tracks.Sum(t => t.Notes.Count)}, Tempos: {project.Tempos.Count}");
@@ -149,16 +153,27 @@ rootCommand.SetAction(async (parseResult) =>
     if (outputFormat is null)
     {
         Console.Error.WriteLine("Error: could not determine output format. Use -f or -o with a recognized extension.");
-        Environment.ExitCode = 1;
-        return;
+        return 1;
     }
 
     var features = new List<FeatureConfig>();
     if (convertPitch && outputFormat.AvailableFeaturesForGeneration.Contains(Feature.ConvertPitch))
         features.Add(new FeatureConfig.ConvertPitchConfig());
 
-    if (outputFormat.AvailableFeaturesForGeneration.Contains(Feature.SplitProject))
-        features.Add(FeatureConfig.SplitProjectConfig.GetDefault(outputFormat));
+    if (splitProject is { } maxTracks)
+    {
+        if (maxTracks <= 0)
+        {
+            Console.Error.WriteLine("Error: --split-project must be a positive integer.");
+            return 1;
+        }
+        if (!outputFormat.AvailableFeaturesForGeneration.Contains(Feature.SplitProject))
+        {
+            Console.Error.WriteLine($"Error: {outputFormat.DisplayName} does not support splitting the project.");
+            return 1;
+        }
+        features.Add(new FeatureConfig.SplitProjectConfig(maxTracks));
+    }
 
     var outputPath = output?.FullName
         ?? Path.Combine(input.DirectoryName ?? ".", outputFormat.GetFileName(project.Name));
@@ -206,11 +221,11 @@ rootCommand.SetAction(async (parseResult) =>
     catch (Exception ex)
     {
         Console.Error.WriteLine($"Error writing output: {ex.Message}");
-        Environment.ExitCode = 1;
-        return;
+        return 1;
     }
 
     Console.WriteLine("Done.");
+    return 0;
 });
 
 var parseResult = rootCommand.Parse(args);
