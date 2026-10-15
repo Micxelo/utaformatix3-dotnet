@@ -126,7 +126,9 @@ internal static class VocaloidPitchConversion
 
             foreach (var (pitchPos, pitchValue) in section)
             {
-                var clamped = (int)Math.Round(pitchValue * PitchMaxValue / pbsForThisSection);
+                // Kotlin roundToInt() = Math.round = floor(x + 0.5)。
+                var raw = pitchValue * PitchMaxValue / pbsForThisSection;
+                var clamped = (int)Math.Floor(raw + 0.5);
                 clamped = clamped < -PitchMaxValue ? -PitchMaxValue : clamped > PitchMaxValue ? PitchMaxValue : clamped;
                 pit.Add(new VocaloidPartPitchData.Event(pitchPos, clamped));
             }
