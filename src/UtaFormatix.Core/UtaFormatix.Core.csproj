@@ -21,6 +21,7 @@
     <EmbeddedResource Include="Resources\template.s5p" />
     <EmbeddedResource Include="Resources\template.ustx" />
     <EmbeddedResource Include="Resources\template.musicxml" />
+    <EmbeddedResource Include="Resources\template.ccs" />
   </ItemGroup>
 
 </Project>
