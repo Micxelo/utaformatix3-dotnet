@@ -6,6 +6,12 @@ namespace UtaFormatix.Core.Process.Pitch;
 
 internal static class PitchCalculation
 {
+    public static double LoggedFrequencyToKey(this double loggedFrequency) =>
+        Constants.KeyCenterC + (loggedFrequency - Constants.LogFrqCenterC) / Constants.LogFrqDiffOneKey;
+
+    public static double KeyToLoggedFrequency(this double key) =>
+        (key - Constants.KeyCenterC) * Constants.LogFrqDiffOneKey + Constants.LogFrqCenterC;
+
     public static List<(long Tick, double? Value)>? GetAbsoluteData(
         this PitchModel pitch, List<Note> notes) =>
         ConvertRelativity(pitch, notes, toAbsolute: true);
