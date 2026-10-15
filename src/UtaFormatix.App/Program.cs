@@ -101,7 +101,7 @@ rootCommand.SetAction(async (parseResult) =>
         return;
     }
 
-    var implementedImportFormats = new HashSet<string>([nameof(Format.UfData), nameof(Format.StandardMid), nameof(Format.VocaloidMid), nameof(Format.Vsq), nameof(Format.Vsqx), nameof(Format.Vpr), nameof(Format.Svp), nameof(Format.S5p), nameof(Format.Ust), nameof(Format.Ustx)]);
+    var implementedImportFormats = new HashSet<string>([nameof(Format.UfData), nameof(Format.StandardMid), nameof(Format.VocaloidMid), nameof(Format.Vsq), nameof(Format.Vsqx), nameof(Format.Vpr), nameof(Format.Svp), nameof(Format.S5p), nameof(Format.Ust), nameof(Format.Ustx), nameof(Format.MusicXml)]);
     var inputExt = input.Extension.TrimStart('.').ToLowerInvariant();
     var inputFormat = Format.Importable.FirstOrDefault(f => f.MatchExtension(inputExt) && implementedImportFormats.Contains(f.Name))
         ?? Format.Importable.FirstOrDefault(f => f.MatchExtension(inputExt));
@@ -133,6 +133,7 @@ rootCommand.SetAction(async (parseResult) =>
             nameof(Format.S5p) => S5p.Parse(input.FullName, importParams),
             nameof(Format.Ust) => Ust.Parse(input.FullName, importParams),
             nameof(Format.Ustx) => Ustx.Parse(input.FullName, importParams),
+            nameof(Format.MusicXml) => MusicXml.Parse(input.FullName, importParams),
             _ => throw new NotSupportedException($"Format '{inputFormat.DisplayName}' is not yet implemented."),
         };
     }
@@ -199,6 +200,9 @@ rootCommand.SetAction(async (parseResult) =>
             case nameof(Format.Ustx):
                 Ustx.GenerateFile(project, outputPath, features);
                 break;
+            case nameof(Format.MusicXml):
+                MusicXml.GenerateFile(project, outputPath, features);
+                break;
             default:
                 throw new NotSupportedException($"Output format '{outputFormat.DisplayName}' is not yet implemented.");
         }
@@ -218,7 +222,7 @@ return await parseResult.InvokeAsync();
 
 static Format? ResolveOutputFormat(string? formatName, FileInfo? output, FileInfo input, Format inputFormat)
 {
-    var implementedExportFormats = new HashSet<string>([nameof(Format.UfData), nameof(Format.StandardMid), nameof(Format.VocaloidMid), nameof(Format.Vsq), nameof(Format.Vsqx), nameof(Format.Vpr), nameof(Format.Svp), nameof(Format.S5p), nameof(Format.Ust), nameof(Format.Ustx)]);
+    var implementedExportFormats = new HashSet<string>([nameof(Format.UfData), nameof(Format.StandardMid), nameof(Format.VocaloidMid), nameof(Format.Vsq), nameof(Format.Vsqx), nameof(Format.Vpr), nameof(Format.Svp), nameof(Format.S5p), nameof(Format.Ust), nameof(Format.Ustx), nameof(Format.MusicXml)]);
 
     if (!string.IsNullOrEmpty(formatName))
     {
