@@ -269,8 +269,12 @@ public static class StandardMid
 
     private static MidiFile GenerateMidiFile(Project project)
     {
-        var masterTrack = GenerateMasterTrack(project);
-        var noteTracks = project.Tracks.Select(GenerateTrack).ToArray();
+        // 与 Kotlin 一致：measurePrefix 折算出 tickPrefix 并偏移 master 事件与音符起算点。
+        var tickPrefix = (long)Constants.TicksInFullNote * project.TimeSignatures[0].Numerator
+            / project.TimeSignatures[0].Denominator * project.MeasurePrefix;
+
+        var masterTrack = GenerateMasterTrack(project, tickPrefix);
+        var noteTracks = project.Tracks.Select(t => GenerateTrack(t, tickPrefix)).ToArray();
 
         var tracks = new List<TrackChunk> { masterTrack };
         tracks.AddRange(noteTracks);
@@ -278,7 +282,7 @@ public static class StandardMid
         return new MidiFile(tracks.ToArray());
     }
 
-    private static TrackChunk GenerateMasterTrack(Project project)
+    private static TrackChunk GenerateMasterTrack(Project project, long tickPrefix)
     {
         var events = new List<MidiEvent>();
 
@@ -289,18 +293,24 @@ public static class StandardMid
         foreach (var tempo in project.Tempos)
         {
             var usPerBeat = MidiUtil.ConvertBpmToMidiTempo(tempo.Bpm);
-            allEvents.Add((tempo.TickPosition, new SetTempoEvent(usPerBeat)));
+            var tick = tempo.TickPosition == 0 ? 0L : tempo.TickPosition + tickPrefix;
+            allEvents.Add((tick, new SetTempoEvent(usPerBeat)));
         }
 
-        foreach (var ts in project.TimeSignatures)
+        // 用共享计数器按序累积小节长度，首个拍号固定于 tick 0；后续拍号加 tickPrefix（与 Kotlin 一致）。
+        var tickCounter = new TickCounter();
+        var firstTs = project.TimeSignatures[0];
+        tickCounter.GoToMeasure(firstTs);
+        allEvents.Add((0L, new TimeSignatureEvent((byte)firstTs.Numerator, (byte)firstTs.Denominator)));
+        foreach (var ts in project.TimeSignatures.Skip(1))
         {
-            var tickCounter = new TickCounter();
-            tickCounter.GoToMeasure(ts.MeasurePosition, ts.Numerator, ts.Denominator);
-            allEvents.Add((tickCounter.OutputTick,
+            tickCounter.GoToMeasure(ts);
+            allEvents.Add((tickCounter.OutputTick + tickPrefix,
                 new TimeSignatureEvent((byte)ts.Numerator, (byte)ts.Denominator)));
         }
 
-        allEvents.Sort((a, b) => a.Tick.CompareTo(b.Tick));
+        // 稳定排序（Kotlin sortBy 稳定）；List.Sort 不稳定会导致同 tick 事件乱序。
+        allEvents = allEvents.OrderBy(x => x.Tick).ToList();
 
         long lastTick = 0;
         foreach (var (tick, evt) in allEvents)
@@ -314,32 +324,27 @@ public static class StandardMid
         return new TrackChunk(events);
     }
 
-    private static TrackChunk GenerateTrack(Track track)
+    private static TrackChunk GenerateTrack(Track track, long tickPrefix)
     {
         var events = new List<MidiEvent>();
 
         events.Add(new SequenceTrackNameEvent(track.Name));
 
-        var sortedNotes = track.Notes.OrderBy(n => n.TickOn).ToList();
-        var allNoteEvents = new List<(long Tick, MidiEvent Event)>();
-
-        foreach (var note in sortedNotes)
+        // 与 Kotlin 一致：不排序，音符从 -tickPrefix 起算，逐音符写 lyric/noteOn/noteOff。
+        long tickPosition = -tickPrefix;
+        foreach (var note in track.Notes)
         {
             var lyric = string.IsNullOrWhiteSpace(note.Lyric) ? Constants.DefaultLyric : note.Lyric;
-            allNoteEvents.Add((note.TickOn, new LyricEvent(lyric)));
-            allNoteEvents.Add((note.TickOn, new NoteOnEvent((SevenBitNumber)note.Key, (SevenBitNumber)127)));
-            allNoteEvents.Add((note.TickOff, new NoteOffEvent((SevenBitNumber)note.Key, (SevenBitNumber)0)));
-        }
 
-        allNoteEvents.Sort((a, b) => a.Tick.CompareTo(b.Tick));
+            var deltaOn = (long)(note.TickOn - tickPosition);
+            tickPosition = note.TickOn;
+            events.Add(new LyricEvent(lyric) { DeltaTime = deltaOn });
 
-        long lastTick = 0;
-        foreach (var (tick, evt) in allNoteEvents)
-        {
-            if (tick < lastTick) continue;
-            evt.DeltaTime = (long)(tick - lastTick);
-            events.Add(evt);
-            lastTick = tick;
+            events.Add(new NoteOnEvent((SevenBitNumber)note.Key, (SevenBitNumber)127) { DeltaTime = 0 });
+
+            var deltaOff = (long)(note.TickOff - tickPosition);
+            tickPosition = note.TickOff;
+            events.Add(new NoteOffEvent((SevenBitNumber)note.Key, (SevenBitNumber)0) { DeltaTime = deltaOff });
         }
 
         return new TrackChunk(events);
