@@ -296,7 +296,7 @@ public static class Vpr
             foreach (var track in project.Tracks)
             {
                 var trackNode = GenerateTrack(track, templateTrack, features);
-                tracksNode.Add(trackNode);
+                tracksNode.Add((JsonNode?)trackNode);
 
                 var partDuration = trackNode["parts"]?.AsArray()?[0]?["duration"]?.GetValue<long>() ?? 0;
                 endTick = Math.Max(endTick, partDuration);
@@ -359,7 +359,7 @@ public static class Vpr
                 ["pos"] = tempo.TickPosition,
                 ["value"] = (int)(tempo.Bpm * BpmRate)
             };
-            eventsNode.Add(eventNode);
+            eventsNode.Add((JsonNode?)eventNode);
         }
     }
 
@@ -379,7 +379,7 @@ public static class Vpr
                 ["numer"] = timeSig.Numerator,
                 ["denom"] = timeSig.Denominator
             };
-            eventsNode.Add(eventNode);
+            eventsNode.Add((JsonNode?)eventNode);
         }
     }
 
@@ -395,7 +395,7 @@ public static class Vpr
             partsNode.Clear();
 
             var partNode = GeneratePart(track, templatePart, features);
-            partsNode.Add(partNode);
+            partsNode.Add((JsonNode?)partNode);
         }
 
         return trackNode;
@@ -417,7 +417,7 @@ public static class Vpr
             foreach (var note in track.Notes)
             {
                 var noteNode = GenerateNote(note, minTick);
-                notesNode.Add(noteNode);
+                notesNode.Add((JsonNode?)noteNode);
             }
         }
 
@@ -471,14 +471,14 @@ public static class Vpr
             ["name"] = "pitchBend",
             ["events"] = GenerateControllerEventsArray(pitchData.Pit)
         };
-        controllersNode.Add(pitController);
+        controllersNode.Add((JsonNode?)pitController);
 
         var pbsController = new JsonObject
         {
             ["name"] = "pitchBendSens",
             ["events"] = GenerateControllerEventsArray(pitchData.Pbs)
         };
-        controllersNode.Add(pbsController);
+        controllersNode.Add((JsonNode?)pbsController);
     }
 
     private static JsonArray GenerateControllerEventsArray(List<VocaloidPartPitchData.Event> events)
@@ -491,7 +491,7 @@ public static class Vpr
                 ["pos"] = evt.Pos,
                 ["value"] = evt.Value
             };
-            array.Add(eventNode);
+            array.Add((JsonNode?)eventNode);
         }
         return array;
     }

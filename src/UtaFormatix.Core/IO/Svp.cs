@@ -382,7 +382,7 @@ public static class Svp
 
             foreach (var track in tracks)
             {
-                newTracks.Add(GenerateTrack(track, emptyTrack, features));
+                newTracks.Add((JsonNode?)GenerateTrack(track, emptyTrack, features));
             }
 
             svp["tracks"] = newTracks;
@@ -409,7 +409,7 @@ public static class Svp
                 ["numerator"] = ts.Numerator,
                 ["denominator"] = ts.Denominator,
             };
-            array.Add(meter);
+            array.Add((JsonNode?)meter);
         }
         return array;
     }
@@ -424,7 +424,7 @@ public static class Svp
                 ["position"] = tempo.TickPosition * TickRate,
                 ["bpm"] = tempo.Bpm,
             };
-            array.Add(t);
+            array.Add((JsonNode?)t);
         }
         return array;
     }
@@ -452,7 +452,7 @@ public static class Svp
                 ["pitch"] = note.Key,
                 ["attributes"] = new JsonObject(),
             };
-            notesArray.Add(noteObj);
+            notesArray.Add((JsonNode?)noteObj);
         }
         mainGroup["notes"] = notesArray;
 
@@ -484,8 +484,8 @@ public static class Svp
         var pointsArray = new JsonArray();
         foreach (var (tick, value) in svpData)
         {
-            pointsArray.Add(JsonNode.Parse(tick.ToString(System.Globalization.CultureInfo.InvariantCulture)));
-            pointsArray.Add(JsonNode.Parse(value.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+            pointsArray.Add((JsonNode?)JsonValue.Create(tick));
+            pointsArray.Add((JsonNode?)JsonValue.Create(value));
         }
 
         return new JsonObject

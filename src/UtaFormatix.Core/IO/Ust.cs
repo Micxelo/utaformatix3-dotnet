@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.IO.Compression;
 using System.Text;
 using UtaFormatix.Core.Models;
@@ -282,10 +283,10 @@ public static class Ust
             .ToList();
 
         var pitchDataMode1 = notePitchDataListMode1.Count > 0
-            ? new UtauMode1TrackPitchData(notePitchDataListMode1)
+            ? new UtauMode1TrackPitchData(notePitchDataListMode1.Cast<UtauMode1NotePitchData?>().ToList())
             : null;
         var pitchDataMode2 = notePitchDataListMode2.Count > 0
-            ? new UtauMode2TrackPitchData(notePitchDataListMode2)
+            ? new UtauMode2TrackPitchData(notePitchDataListMode2.Cast<UtauMode2NotePitchData?>().ToList())
             : null;
 
         return new FileParseResult(
@@ -317,7 +318,7 @@ public static class Ust
                 System.Globalization.CultureInfo.InvariantCulture, out var v) ? v : 0.0)
             .ToList();
 
-    private static bool TryGetValue(string line, string key, out string? value)
+    private static bool TryGetValue(string line, string key, [NotNullWhen(true)] out string? value)
     {
         value = null;
         var prefix = key + "=";

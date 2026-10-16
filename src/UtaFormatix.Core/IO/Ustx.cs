@@ -2,11 +2,23 @@ using System.Reflection;
 using System.Text.RegularExpressions;
 using YamlDotNet.Serialization;
 using YamlDotNet.Serialization.NamingConventions;
+using YamlDotNet.Serialization.TypeResolvers;
 using UtaFormatix.Core.Models;
 using UtaFormatix.Core.Process.Pitch;
 using PitchModel = UtaFormatix.Core.Models.Pitch;
 
 namespace UtaFormatix.Core.IO;
+
+/// <summary>
+/// Static YamlDotNet context for USTX serialization. The YamlDotNet source generator
+/// fills in the other partial half with the AOT-friendly serializer metadata, so we can
+/// use StaticDeserializerBuilder/StaticSerializerBuilder instead of the reflection-based
+/// builders (which break under NativeAOT).
+/// </summary>
+[YamlStaticContext]
+public partial class UstxYamlContext : StaticContext
+{
+}
 
 public static class Ustx
 {
@@ -25,7 +37,7 @@ public static class Ustx
     public static Project Parse(string filePath, ImportParams? importParams = null)
     {
         var yamlText = File.ReadAllText(filePath);
-        var deserializer = new DeserializerBuilder()
+        var deserializer = new StaticDeserializerBuilder(new UstxYamlContext())
             .WithNamingConvention(UnderscoredNamingConvention.Instance)
             .IgnoreUnmatchedProperties()
             .Build();
@@ -216,7 +228,7 @@ public static class Ustx
     private static string GenerateContent(Project project, List<FeatureConfig> features)
     {
         var templateYamlText = LoadTemplate();
-        var deserializer = new DeserializerBuilder()
+        var deserializer = new StaticDeserializerBuilder(new UstxYamlContext())
             .WithNamingConvention(UnderscoredNamingConvention.Instance)
             .IgnoreUnmatchedProperties()
             .Build();
@@ -258,7 +270,7 @@ public static class Ustx
             VoiceParts = voiceParts,
         };
 
-        var serializer = new SerializerBuilder()
+        var serializer = new StaticSerializerBuilder(new UstxYamlContext())
             .WithNamingConvention(UnderscoredNamingConvention.Instance)
             .ConfigureDefaultValuesHandling(DefaultValuesHandling.Preserve)
             .Build();
@@ -340,6 +352,7 @@ public static class Ustx
 
     #region YAML Serialization Models
 
+    [YamlSerializable]
     public sealed class UstxProject
     {
         public string Name { get; set; } = "";
@@ -358,6 +371,7 @@ public static class Ustx
         public List<UstxVoicePart> VoiceParts { get; set; } = [];
     }
 
+    [YamlSerializable]
     public sealed class UstxExpression
     {
         public string Name { get; set; } = "";
@@ -371,6 +385,7 @@ public static class Ustx
         public List<string>? Options { get; set; }
     }
 
+    [YamlSerializable]
     public sealed class UstxTrack
     {
         public string Phonemizer { get; set; } = "";
@@ -380,6 +395,7 @@ public static class Ustx
         public string? TrackName { get; set; }
     }
 
+    [YamlSerializable]
     public sealed class UstxVoicePart
     {
         public string Name { get; set; } = "";
@@ -390,6 +406,7 @@ public static class Ustx
         public List<UstxCurve>? Curves { get; set; }
     }
 
+    [YamlSerializable]
     public sealed class UstxNote
     {
         public long Position { get; set; }
@@ -400,12 +417,14 @@ public static class Ustx
         public UstxVibrato Vibrato { get; set; } = new();
     }
 
+    [YamlSerializable]
     public sealed class UstxPitch
     {
         public List<UstxDatum> Data { get; set; } = [];
         public bool SnapFirst { get; set; }
     }
 
+    [YamlSerializable]
     public sealed class UstxDatum
     {
         public double X { get; set; }
@@ -413,6 +432,7 @@ public static class Ustx
         public string Shape { get; set; } = "io";
     }
 
+    [YamlSerializable]
     public sealed class UstxVibrato
     {
         public double Length { get; set; }
@@ -424,6 +444,7 @@ public static class Ustx
         public double Drift { get; set; }
     }
 
+    [YamlSerializable]
     public sealed class UstxCurve
     {
         public List<long> Xs { get; set; } = [];
@@ -431,12 +452,14 @@ public static class Ustx
         public string Abbr { get; set; } = "";
     }
 
+    [YamlSerializable]
     public sealed class UstxTempo
     {
         public long Position { get; set; }
         public double Bpm { get; set; }
     }
 
+    [YamlSerializable]
     public sealed class UstxTimeSignature
     {
         public int BarPosition { get; set; }

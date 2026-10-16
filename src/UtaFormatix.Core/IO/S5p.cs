@@ -187,7 +187,7 @@ public static class S5p
         var meterArray = new JsonArray();
         foreach (var ts in project.TimeSignatures)
         {
-            meterArray.Add(new JsonObject
+            meterArray.Add((JsonNode?)new JsonObject
             {
                 ["measure"] = ts.MeasurePosition,
                 ["beatPerMeasure"] = ts.Numerator,
@@ -199,7 +199,7 @@ public static class S5p
         var tempoArray = new JsonArray();
         foreach (var tempo in project.Tempos)
         {
-            tempoArray.Add(new JsonObject
+            tempoArray.Add((JsonNode?)new JsonObject
             {
                 ["position"] = tempo.TickPosition * TickRate,
                 ["beatPerMinute"] = tempo.Bpm,
@@ -211,7 +211,7 @@ public static class S5p
         var newTracks = new JsonArray();
         foreach (var track in project.Tracks)
         {
-            newTracks.Add(GenerateTrack(track, emptyTrack, features));
+            newTracks.Add((JsonNode?)GenerateTrack(track, emptyTrack, features));
         }
         s5p["tracks"] = newTracks;
 
@@ -231,7 +231,7 @@ public static class S5p
         var notesArray = new JsonArray();
         foreach (var note in track.Notes)
         {
-            notesArray.Add(new JsonObject
+            notesArray.Add((JsonNode?)new JsonObject
             {
                 ["onset"] = note.TickOn * TickRate,
                 ["duration"] = note.Length * TickRate,
@@ -259,8 +259,8 @@ public static class S5p
         var divisor = DefaultInterval / (double)TickRate;
         foreach (var (tick, value) in data)
         {
-            array.Add(JsonNode.Parse((tick / divisor).ToString(System.Globalization.CultureInfo.InvariantCulture)));
-            array.Add(JsonNode.Parse((value * 100.0).ToString(System.Globalization.CultureInfo.InvariantCulture)));
+            array.Add((JsonNode?)JsonValue.Create(tick / divisor));
+            array.Add((JsonNode?)JsonValue.Create(value * 100.0));
         }
 
         return array;

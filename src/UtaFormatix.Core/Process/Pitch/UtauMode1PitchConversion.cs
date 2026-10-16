@@ -61,6 +61,6 @@ internal static class UtauMode1PitchConversion
             return new UtauMode1NotePitchData(points);
         }).ToList();
 
-        return new UtauMode1TrackPitchData(notePitches);
+        return new UtauMode1TrackPitchData(notePitches.Cast<UtauMode1NotePitchData?>().ToList());
     }
 }

@@ -11,6 +11,7 @@
   <ItemGroup>
     <PackageReference Include="UtaFormatix.Data" Version="1.0.1" />
     <PackageReference Include="Melanchall.DryWetMidi" Version="8.0.3" />
+    <PackageReference Include="Vecc.YamlDotNet.Analyzers.StaticGenerator" Version="18.1.0" />
     <PackageReference Include="YamlDotNet" Version="18.1.0" />
   </ItemGroup>
 
