@@ -91,14 +91,12 @@ public static class StandardMid
     {
         var rawTempos = new List<Tempo>();
         var rawTimeSignatures = new List<TimeSignature>();
-        // 整数换算语义（tickRate=1，传入标准 tick），避免浮点误差（见缺陷 4）。
         var tickCounter = new TickCounter();
 
-        long rawTick = 0;
+        long tick = 0;
         foreach (var evt in masterTrack.Events)
         {
-            rawTick += evt.DeltaTime;
-            var tick = MidiUtil.ConvertTickTime(rawTick, timeDivision);
+            tick += MidiUtil.ConvertTickTime(evt.DeltaTime, timeDivision);
 
             if (evt is SetTempoEvent tempoEvt)
             {

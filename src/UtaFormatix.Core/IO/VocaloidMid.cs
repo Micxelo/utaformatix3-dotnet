@@ -143,13 +143,12 @@ public static class VocaloidMid
     {
         var rawTempos = new List<Tempo>();
         var rawTimeSignatures = new List<TimeSignature>();
-        var tickCounter = new TickCounter(tickRate);
+        var tickCounter = new TickCounter();
 
-        long rawTick = 0;
+        long tickPosition = 0;
         foreach (var evt in masterTrack.Events)
         {
-            rawTick += evt.DeltaTime;
-            var tickPosition = (long)(rawTick / tickRate);
+            tickPosition += MidiUtil.ConvertTickTime(evt.DeltaTime, (int)(tickRate * MidiUtil.StandardTimeDivision));
 
             if (evt is SetTempoEvent tempoEvt)
             {
@@ -158,7 +157,7 @@ public static class VocaloidMid
             }
             else if (evt is TimeSignatureEvent tsEvt)
             {
-                tickCounter.GoToTick(rawTick, tsEvt.Numerator, tsEvt.Denominator);
+                tickCounter.GoToTick(tickPosition, tsEvt.Numerator, tsEvt.Denominator);
                 rawTimeSignatures.Add(new TimeSignature(tickCounter.Measure, tsEvt.Numerator, tsEvt.Denominator));
             }
         }

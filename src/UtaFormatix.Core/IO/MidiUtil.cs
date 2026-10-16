@@ -5,7 +5,7 @@ internal static class MidiUtil
     public const int StandardTimeDivision = 480;
 
     public static double ConvertMidiTempoToBpm(long microsecondsPerBeat) =>
-        Math.Round(60_000_000.0 / microsecondsPerBeat, 2);
+        (long)(60_000_000.0 / microsecondsPerBeat * 100) / 100.0;
 
     public static long ConvertBpmToMidiTempo(double bpm) =>
         (long)(60_000_000.0 / bpm);
