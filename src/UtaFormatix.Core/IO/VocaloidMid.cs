@@ -394,7 +394,9 @@ public static class VocaloidMid
         Project mixerProject, List<FeatureConfig> features)
     {
         var events = new List<MidiEvent>();
-        events.Add(new SequenceTrackNameEvent(track.Name));
+        // Preserve UTF-8 track-name bytes through the Latin-1 writer used for Shift-JIS DM blocks.
+        var trackName = Latin1.GetString(Encoding.UTF8.GetBytes(track.Name));
+        events.Add(new SequenceTrackNameEvent(trackName));
 
         var trackText = GenerateTrackText(track, tickPrefix, measurePrefix, mixerProject, features);
         var shiftJisBytes = ShiftJis.GetBytes(trackText);
