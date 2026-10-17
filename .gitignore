@@ -29,3 +29,8 @@ obj/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+##
+## Tests
+##
+tests/
