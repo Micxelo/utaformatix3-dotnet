@@ -332,17 +332,22 @@ public static class StandardMid
         long tickPosition = -tickPrefix;
         foreach (var note in track.Notes)
         {
+            if (note.Key is < 0 or > 127)
+                throw new ArgumentOutOfRangeException(nameof(note.Key), note.Key,
+                    $"Standard MIDI note keys must be in range 0..127 (track '{track.Name}', note {note.Id + 1}).");
+
+            var key = (SevenBitNumber)note.Key;
             var lyric = string.IsNullOrWhiteSpace(note.Lyric) ? Constants.DefaultLyric : note.Lyric;
 
             var deltaOn = (long)(note.TickOn - tickPosition);
             tickPosition = note.TickOn;
             events.Add(new LyricEvent(lyric) { DeltaTime = deltaOn });
 
-            events.Add(new NoteOnEvent((SevenBitNumber)note.Key, (SevenBitNumber)127) { DeltaTime = 0 });
+            events.Add(new NoteOnEvent(key, (SevenBitNumber)127) { DeltaTime = 0 });
 
             var deltaOff = (long)(note.TickOff - tickPosition);
             tickPosition = note.TickOff;
-            events.Add(new NoteOffEvent((SevenBitNumber)note.Key, (SevenBitNumber)0) { DeltaTime = deltaOff });
+            events.Add(new NoteOffEvent(key, (SevenBitNumber)0) { DeltaTime = deltaOff });
         }
 
         return new TrackChunk(events);
