@@ -36,7 +36,7 @@ internal static class VocaloidPitchConversion
                     if (pitEvent.Pos < pbsEvent.Pos)
                     {
                         pitMultipliedByPbs[pitEvent.Pos] = pitEvent.Value * pbsCurrentValue;
-                        if (i == pit.Count - 1) pitIndex = i;
+                        pitIndex = i + 1;
                     }
                     else
                     {
@@ -47,7 +47,7 @@ internal static class VocaloidPitchConversion
                 pbsCurrentValue = pbsEvent.Value;
             }
 
-            if (pitIndex < pit.Count - 1)
+            if (pitIndex < pit.Count)
             {
                 for (var i = pitIndex; i <= pit.Count - 1; i++)
                 {
