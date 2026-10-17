@@ -265,13 +265,14 @@ public static class VocaloidMid
         var notes = new List<Note>();
         foreach (var (tickStr, eventId) in eventList)
         {
-            if (!tickStr.All(char.IsDigit)) continue;
+            var tickNumber = tickStr.Length > 1 && tickStr.StartsWith('+') ? tickStr[1..] : tickStr;
+            if (!tickNumber.All(char.IsDigit)) continue;
             if (!sectionMap.TryGetValue(eventId, out var noteSection)) continue;
             if (noteSection.GetValueOrDefault("Type") != "Anote") continue;
             if (!long.TryParse(noteSection.GetValueOrDefault("Length"), out var length)) continue;
             if (!int.TryParse(noteSection.GetValueOrDefault("Note#"), out var key)) continue;
 
-            var tickPosition = long.Parse(tickStr) - tickPrefix;
+            var tickPosition = long.Parse(tickNumber) - tickPrefix;
 
             string lyric = parameters.DefaultLyric;
             string? phoneme = null;
