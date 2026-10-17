@@ -30,6 +30,8 @@ public static class VocaloidMid
         var outputFormat = format ?? Format.VocaloidMid;
         var readingSettings = new ReadingSettings { TextEncoding = Latin1 };
         var midiFile = MidiTimeSignature.ReadFile(filePath, readingSettings);
+        var warnings = new List<ImportWarning>();
+        MidiTiming.InsertDefaultMarkers(midiFile, warnings);
         var wasSmpte = MidiTiming.NormalizeSmpte(midiFile);
 
         var ticksPerBeat = ((TicksPerQuarterNoteTimeDivision)midiFile.TimeDivision).TicksPerQuarterNote;
@@ -39,7 +41,6 @@ public static class VocaloidMid
         if (trackChunks.Length == 0)
             throw new CannotReadFileException();
 
-        var warnings = new List<ImportWarning>();
         var tracksAsText = ExtractVsqTextsFromMetaEvents(trackChunks).Where(t => t.Length > 0).ToList();
         if (tracksAsText.Count == 0)
             throw new CannotReadFileException();

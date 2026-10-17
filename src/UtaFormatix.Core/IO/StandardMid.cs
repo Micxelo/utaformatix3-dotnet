@@ -12,6 +12,8 @@ public static class StandardMid
     {
         var parameters = importParams ?? new ImportParams();
         var midiFile = MidiTimeSignature.ReadFile(filePath, StandardMidReadingSettings);
+        var warnings = new List<ImportWarning>();
+        MidiTiming.InsertDefaultMarkers(midiFile, warnings);
         var wasSmpte = MidiTiming.NormalizeSmpte(midiFile);
 
         var ticksPerBeat = ((TicksPerQuarterNoteTimeDivision)midiFile.TimeDivision).TicksPerQuarterNote;
@@ -20,7 +22,6 @@ public static class StandardMid
         if (tracks.Length == 0)
             throw new Exceptions.CannotReadFileException();
 
-        var warnings = new List<ImportWarning>();
         var (tempos, timeSignatures, tickPrefix) = ParseMasterTrack(tracks[0], ticksPerBeat, 0, warnings, wasSmpte);
 
         var projectTracks = new List<Track>();

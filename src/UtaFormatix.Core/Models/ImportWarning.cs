@@ -12,7 +12,11 @@ public abstract record ImportWarning
 
     public sealed record DefaultTempoFixed(double OriginalBpm) : ImportWarning;
 
+    public sealed record DefaultTempoInserted(long FirstEventTick) : ImportWarning;
+
     public sealed record TimeSignatureNotFound : ImportWarning;
+
+    public sealed record DefaultTimeSignatureInserted(long FirstEventTick) : ImportWarning;
 
     public sealed record TimeSignatureIgnoredInTrack(int TrackIndex, TimeSignature TimeSignatureValue) : ImportWarning;
 

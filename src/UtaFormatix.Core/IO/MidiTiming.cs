@@ -1,11 +1,42 @@
 using Melanchall.DryWetMidi.Common;
 using Melanchall.DryWetMidi.Core;
+using UtaFormatix.Core.Models;
 
 namespace UtaFormatix.Core.IO;
 
 internal static class MidiTiming
 {
     private const long DefaultMicrosecondsPerQuarterNote = 500_000;
+
+    public static void InsertDefaultMarkers(MidiFile file, List<ImportWarning> warnings)
+    {
+        var masterTrack = file.GetTrackChunks().FirstOrDefault();
+        if (masterTrack is null) return;
+
+        long sourceTick = 0;
+        long? firstTempoTick = null;
+        long? firstSignatureTick = null;
+        foreach (var evt in masterTrack.Events)
+        {
+            sourceTick = checked(sourceTick + evt.DeltaTime);
+            if (evt is SetTempoEvent) firstTempoTick ??= sourceTick;
+            if (MidiTimeSignature.TryGet(evt, out _, out _)) firstSignatureTick ??= sourceTick;
+            if (firstTempoTick.HasValue && firstSignatureTick.HasValue) break;
+        }
+
+        // Zero-delta events leave every original event at its original position.
+        // Inspect source ticks before PPQN/SMPTE rounding can hide a short delay.
+        if (firstTempoTick is > 0)
+        {
+            masterTrack.Events.Insert(0, new SetTempoEvent(DefaultMicrosecondsPerQuarterNote));
+            warnings.Add(new ImportWarning.DefaultTempoInserted(firstTempoTick.Value));
+        }
+        if (firstSignatureTick is > 0)
+        {
+            masterTrack.Events.Insert(0, new TimeSignatureEvent(Constants.DefaultMeterHigh, Constants.DefaultMeterLow));
+            warnings.Add(new ImportWarning.DefaultTimeSignatureInserted(firstSignatureTick.Value));
+        }
+    }
 
     public static bool NormalizeSmpte(MidiFile file)
     {
@@ -32,17 +63,13 @@ internal static class MidiTiming
 
         var tracks = file.GetTrackChunks().ToArray();
         var segments = new List<Segment> { new(0, 0, DefaultMicrosecondsPerQuarterNote) };
-        long? firstTempoTick = null;
-        long? firstSignatureTick = null;
         long sourceTick = 0;
         if (tracks.Length > 0)
         {
             foreach (var evt in tracks[0].Events)
             {
                 sourceTick = checked(sourceTick + evt.DeltaTime);
-                if (MidiTimeSignature.TryGet(evt, out _, out _)) firstSignatureTick ??= sourceTick;
                 if (evt is not SetTempoEvent tempo) continue;
-                firstTempoTick ??= sourceTick;
                 var previous = segments[^1];
                 var position = previous.ProjectTick +
                     ConvertInterval(sourceTick - previous.SourceTick, previous.MicrosecondsPerQuarterNote);
@@ -71,15 +98,6 @@ internal static class MidiTiming
             }
         }
 
-        // Explicit defaults are needed when the first real marker is delayed;
-        // the common parser otherwise moves that marker back to the start.
-        if (tracks.Length > 0)
-        {
-            if (firstTempoTick > 0)
-                tracks[0].Events.Insert(0, new SetTempoEvent(DefaultMicrosecondsPerQuarterNote));
-            if (firstSignatureTick > 0)
-                tracks[0].Events.Insert(0, new TimeSignatureEvent(4, 4));
-        }
         file.TimeDivision = new TicksPerQuarterNoteTimeDivision(MidiUtil.StandardTimeDivision);
         return true;
     }

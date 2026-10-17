@@ -152,6 +152,19 @@ rootCommand.SetAction(async (parseResult) =>
         return 1;
     }
 
+    foreach (var warning in project.ImportWarnings)
+    {
+        var message = warning switch
+        {
+            ImportWarning.DefaultTempoInserted tempo =>
+                $"First tempo event occurs at source tick {tempo.FirstEventTick}; inserted default tempo 120 BPM at tick 0.",
+            ImportWarning.DefaultTimeSignatureInserted signature =>
+                $"First time signature event occurs at source tick {signature.FirstEventTick}; inserted default time signature 4/4 at tick 0.",
+            _ => null,
+        };
+        if (message is not null) Console.Error.WriteLine($"Warning: {message}");
+    }
+
     Console.WriteLine($"  Tracks: {project.Tracks.Count}, Notes: {project.Tracks.Sum(t => t.Notes.Count)}, Tempos: {project.Tempos.Count}");
 
     var outputFormat = ResolveOutputFormat(formatName, output, input, inputFormat);
