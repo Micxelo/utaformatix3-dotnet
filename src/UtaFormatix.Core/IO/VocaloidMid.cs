@@ -129,7 +129,7 @@ public static class VocaloidMid
     private static int GetMeasurePrefix(string firstTrack)
     {
         const string parameterName = "PreMeasure";
-        foreach (var line in firstTrack.Split('\n'))
+        foreach (var line in firstTrack.Split(['\r', '\n']))
         {
             var trimmed = line.Trim();
             if (trimmed.Contains(parameterName))
@@ -228,7 +228,7 @@ public static class VocaloidMid
 
     private static Track ParseTrack(string trackAsText, int trackId, long tickPrefix, ImportParams parameters)
     {
-        var lines = trackAsText.Split('\n').Select(l => l.Trim()).Where(l => l.Length > 0).ToList();
+        var lines = trackAsText.Split(['\r', '\n']).Select(l => l.Trim()).Where(l => l.Length > 0).ToList();
         var titleWithIndexes = new List<(string Title, int Index)>();
 
         for (var i = 0; i < lines.Count; i++)
