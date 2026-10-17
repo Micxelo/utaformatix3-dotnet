@@ -11,7 +11,7 @@ public static class StandardMid
     public static Project Parse(string filePath, ImportParams? importParams = null)
     {
         var parameters = importParams ?? new ImportParams();
-        var midiFile = MidiFile.Read(filePath, StandardMidReadingSettings);
+        var midiFile = MidiTimeSignature.ReadFile(filePath, StandardMidReadingSettings);
 
         var ticksPerBeat = (midiFile.TimeDivision as TicksPerQuarterNoteTimeDivision)?.TicksPerQuarterNote
             ?? MidiUtil.StandardTimeDivision;
@@ -71,6 +71,7 @@ public static class StandardMid
     private static readonly WritingSettings StandardMidWritingSettings = new()
     {
         TextEncoding = Encoding.UTF8,
+        CustomMetaEventTypes = MidiTimeSignature.EventTypes,
     };
 
     private static readonly Encoding Latin1 = Encoding.GetEncoding(28591);
@@ -103,10 +104,10 @@ public static class StandardMid
                 var bpm = MidiUtil.ConvertMidiTempoToBpm((long)tempoEvt.MicrosecondsPerQuarterNote);
                 rawTempos.Add(new Tempo(tick, bpm));
             }
-            else if (evt is TimeSignatureEvent tsEvt)
+            else if (MidiTimeSignature.TryGet(evt, out var numerator, out var denominator))
             {
-                tickCounter.GoToTick(tick, tsEvt.Numerator, tsEvt.Denominator);
-                rawTimeSignatures.Add(new TimeSignature(tickCounter.Measure, tsEvt.Numerator, tsEvt.Denominator));
+                tickCounter.GoToTick(tick, numerator, denominator);
+                rawTimeSignatures.Add(new TimeSignature(tickCounter.Measure, numerator, denominator));
             }
         }
 
@@ -299,12 +300,12 @@ public static class StandardMid
         var tickCounter = new TickCounter();
         var firstTs = project.TimeSignatures[0];
         tickCounter.GoToMeasure(firstTs);
-        allEvents.Add((0L, new TimeSignatureEvent((byte)firstTs.Numerator, (byte)firstTs.Denominator)));
+        allEvents.Add((0L, MidiTimeSignature.CreateEvent(firstTs.Numerator, firstTs.Denominator)));
         foreach (var ts in project.TimeSignatures.Skip(1))
         {
             tickCounter.GoToMeasure(ts);
             allEvents.Add((tickCounter.OutputTick + tickPrefix,
-                new TimeSignatureEvent((byte)ts.Numerator, (byte)ts.Denominator)));
+                MidiTimeSignature.CreateEvent(ts.Numerator, ts.Denominator)));
         }
 
         // 稳定排序（Kotlin sortBy 稳定）；List.Sort 不稳定会导致同 tick 事件乱序。

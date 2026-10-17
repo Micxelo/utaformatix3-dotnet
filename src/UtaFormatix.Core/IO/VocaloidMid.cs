@@ -29,7 +29,7 @@ public static class VocaloidMid
         var parameters = importParams ?? new ImportParams();
         var outputFormat = format ?? Format.VocaloidMid;
         var readingSettings = new ReadingSettings { TextEncoding = Latin1 };
-        var midiFile = MidiFile.Read(filePath, readingSettings);
+        var midiFile = MidiTimeSignature.ReadFile(filePath, readingSettings);
 
         var ticksPerBeat = (midiFile.TimeDivision as TicksPerQuarterNoteTimeDivision)?.TicksPerQuarterNote
             ?? MidiUtil.StandardTimeDivision;
@@ -77,7 +77,11 @@ public static class VocaloidMid
         midiFile.TimeDivision = new TicksPerQuarterNoteTimeDivision(MidiUtil.StandardTimeDivision);
 
         using var ms = new MemoryStream();
-        var writingSettings = new WritingSettings { TextEncoding = Latin1 };
+        var writingSettings = new WritingSettings
+        {
+            TextEncoding = Latin1,
+            CustomMetaEventTypes = MidiTimeSignature.EventTypes,
+        };
         midiFile.Write(ms, MidiFileFormat.MultiTrack, writingSettings);
         var data = ms.ToArray();
 
@@ -155,10 +159,10 @@ public static class VocaloidMid
                 var bpm = MidiUtil.ConvertMidiTempoToBpm((long)tempoEvt.MicrosecondsPerQuarterNote);
                 rawTempos.Add(new Tempo(tickPosition, bpm));
             }
-            else if (evt is TimeSignatureEvent tsEvt)
+            else if (MidiTimeSignature.TryGet(evt, out var numerator, out var denominator))
             {
-                tickCounter.GoToTick(tickPosition, tsEvt.Numerator, tsEvt.Denominator);
-                rawTimeSignatures.Add(new TimeSignature(tickCounter.Measure, tsEvt.Numerator, tsEvt.Denominator));
+                tickCounter.GoToTick(tickPosition, numerator, denominator);
+                rawTimeSignatures.Add(new TimeSignature(tickCounter.Measure, numerator, denominator));
             }
         }
 
@@ -368,7 +372,9 @@ public static class VocaloidMid
 
             if (evt is TimeSignature ts)
             {
-                events.Add(new TimeSignatureEvent((byte)ts.Numerator, (byte)ts.Denominator) { DeltaTime = delta });
+                var signature = MidiTimeSignature.CreateEvent(ts.Numerator, ts.Denominator);
+                signature.DeltaTime = delta;
+                events.Add(signature);
             }
             else if (evt is Tempo tempo)
             {
