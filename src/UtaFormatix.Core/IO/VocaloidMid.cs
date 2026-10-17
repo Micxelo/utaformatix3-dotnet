@@ -365,7 +365,8 @@ public static class VocaloidMid
             tickEventPairs.Add((counter.OutputTick + tickPrefix, ts));
         }
 
-        tickEventPairs.Sort((a, b) => a.Tick.CompareTo(b.Tick));
+        // Preserve source order at the same tick: the last tempo takes effect.
+        tickEventPairs = tickEventPairs.OrderBy(x => x.Tick).ToList();
 
         long lastTick = 0;
         for (var i = 0; i < tickEventPairs.Count; i++)
