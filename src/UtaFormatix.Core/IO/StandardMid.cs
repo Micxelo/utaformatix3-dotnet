@@ -12,16 +12,16 @@ public static class StandardMid
     {
         var parameters = importParams ?? new ImportParams();
         var midiFile = MidiTimeSignature.ReadFile(filePath, StandardMidReadingSettings);
+        var wasSmpte = MidiTiming.NormalizeSmpte(midiFile);
 
-        var ticksPerBeat = (midiFile.TimeDivision as TicksPerQuarterNoteTimeDivision)?.TicksPerQuarterNote
-            ?? MidiUtil.StandardTimeDivision;
+        var ticksPerBeat = ((TicksPerQuarterNoteTimeDivision)midiFile.TimeDivision).TicksPerQuarterNote;
 
         var tracks = midiFile.GetTrackChunks().ToArray();
         if (tracks.Length == 0)
             throw new Exceptions.CannotReadFileException();
 
         var warnings = new List<ImportWarning>();
-        var (tempos, timeSignatures, tickPrefix) = ParseMasterTrack(tracks[0], ticksPerBeat, 0, warnings);
+        var (tempos, timeSignatures, tickPrefix) = ParseMasterTrack(tracks[0], ticksPerBeat, 0, warnings, wasSmpte);
 
         var projectTracks = new List<Track>();
         for (var i = 0; i < tracks.Length; i++)
@@ -88,7 +88,7 @@ public static class StandardMid
 
     private static (List<Tempo> Tempos, List<TimeSignature> TimeSignatures, long TickPrefix)
         ParseMasterTrack(TrackChunk masterTrack, int timeDivision, int measurePrefix,
-            List<ImportWarning> warnings)
+            List<ImportWarning> warnings, bool preserveTempoPrecision)
     {
         var rawTempos = new List<Tempo>();
         var rawTimeSignatures = new List<TimeSignature>();
@@ -101,7 +101,9 @@ public static class StandardMid
 
             if (evt is SetTempoEvent tempoEvt)
             {
-                var bpm = MidiUtil.ConvertMidiTempoToBpm((long)tempoEvt.MicrosecondsPerQuarterNote);
+                var bpm = preserveTempoPrecision
+                    ? 60_000_000.0 / tempoEvt.MicrosecondsPerQuarterNote
+                    : MidiUtil.ConvertMidiTempoToBpm(tempoEvt.MicrosecondsPerQuarterNote);
                 rawTempos.Add(new Tempo(tick, bpm));
             }
             else if (MidiTimeSignature.TryGet(evt, out var numerator, out var denominator))

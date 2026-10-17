@@ -30,9 +30,9 @@ public static class VocaloidMid
         var outputFormat = format ?? Format.VocaloidMid;
         var readingSettings = new ReadingSettings { TextEncoding = Latin1 };
         var midiFile = MidiTimeSignature.ReadFile(filePath, readingSettings);
+        var wasSmpte = MidiTiming.NormalizeSmpte(midiFile);
 
-        var ticksPerBeat = (midiFile.TimeDivision as TicksPerQuarterNoteTimeDivision)?.TicksPerQuarterNote
-            ?? MidiUtil.StandardTimeDivision;
+        var ticksPerBeat = ((TicksPerQuarterNoteTimeDivision)midiFile.TimeDivision).TicksPerQuarterNote;
         var tickRate = (double)ticksPerBeat / MidiUtil.StandardTimeDivision;
 
         var trackChunks = midiFile.GetTrackChunks().ToArray();
@@ -45,7 +45,7 @@ public static class VocaloidMid
             throw new CannotReadFileException();
 
         var measurePrefix = GetMeasurePrefix(tracksAsText[0]);
-        var (tempos, timeSignatures, tickPrefix) = ParseMasterTrack(trackChunks[0], tickRate, measurePrefix, warnings);
+        var (tempos, timeSignatures, tickPrefix) = ParseMasterTrack(trackChunks[0], tickRate, measurePrefix, warnings, wasSmpte);
 
         var tracks = tracksAsText.Select((text, i) => ParseTrack(text, i, tickPrefix, parameters)).ToList();
 
@@ -143,7 +143,7 @@ public static class VocaloidMid
 
     private static (List<Tempo> Tempos, List<TimeSignature> TimeSignatures, long TickPrefix)
         ParseMasterTrack(TrackChunk masterTrack, double tickRate, int measurePrefix,
-            List<ImportWarning> warnings)
+            List<ImportWarning> warnings, bool preserveTempoPrecision)
     {
         var rawTempos = new List<Tempo>();
         var rawTimeSignatures = new List<TimeSignature>();
@@ -156,7 +156,9 @@ public static class VocaloidMid
 
             if (evt is SetTempoEvent tempoEvt)
             {
-                var bpm = MidiUtil.ConvertMidiTempoToBpm((long)tempoEvt.MicrosecondsPerQuarterNote);
+                var bpm = preserveTempoPrecision
+                    ? 60_000_000.0 / tempoEvt.MicrosecondsPerQuarterNote
+                    : MidiUtil.ConvertMidiTempoToBpm(tempoEvt.MicrosecondsPerQuarterNote);
                 rawTempos.Add(new Tempo(tickPosition, bpm));
             }
             else if (MidiTimeSignature.TryGet(evt, out var numerator, out var denominator))
