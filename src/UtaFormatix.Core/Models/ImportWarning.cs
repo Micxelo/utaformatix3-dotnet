@@ -2,6 +2,8 @@ namespace UtaFormatix.Core.Models;
 
 public abstract record ImportWarning
 {
+    public sealed record InputDiagnostic(string Code, string Path, string Message) : ImportWarning;
+
     public sealed record TempoNotFound : ImportWarning;
 
     public sealed record TempoIgnoredInFile(string FilePath, Tempo TempoValue) : ImportWarning;

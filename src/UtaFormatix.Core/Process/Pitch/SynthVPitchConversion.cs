@@ -80,23 +80,16 @@ internal static class SynthVPitchConversion
         var result = new Dictionary<long, double>();
         if (points.Count == 0) return result;
 
+        (long Tick, double Value)? previous = null;
         foreach (var point in points)
         {
-            if (result.Count == 0 || (result.Count > 0 && result.TryGetValue(result.Keys.Last(), out var lastVal) && lastVal == 1.0))
+            if (previous is { } last && last.Value != 1.0)
             {
-                result[point.Tick] = point.Value;
+                for (var t = last.Tick; t < point.Tick; t++)
+                    result[t] = last.Value;
             }
-            else
-            {
-                var lastKey = result.Keys.Last();
-                var lastValue = result[lastKey];
-                if (lastValue != 1.0)
-                {
-                    for (var t = lastKey; t < point.Tick; t++)
-                        result[t] = lastValue;
-                }
-                result[point.Tick] = point.Value;
-            }
+            result[point.Tick] = point.Value;
+            previous = point;
         }
 
         return result;
@@ -154,16 +147,17 @@ internal static class SynthVPitchConversion
         Dictionary<long, double> vibratoEnv)
     {
         if (note is null || note.NoteStartTick < 0L) return points;
+        var depth = (note.Depth ?? defaultParameters?.Depth ?? VibratoDefaultDepthSemitone) * 0.5;
+        if (depth == 0.0) return points;
 
         var noteStartSec = tickTimeTransformer.TickToSec(note.NoteStartTick);
         var noteEndSec = tickTimeTransformer.TickToSec(note.NoteEndTick);
 
         var vibratoStartSec = (note.VibratoStart ?? defaultParameters?.VibratoStart ?? VibratoDefaultStartSec) + noteStartSec;
-        var vibratoStartTick = tickTimeTransformer.SecToTick(vibratoStartSec);
+        if (vibratoStartSec >= noteEndSec) return points;
+        var vibratoStartTick = tickTimeTransformer.SecToTickChecked(vibratoStartSec);
         var easeInLength = note.EaseInLength ?? defaultParameters?.EaseInLength ?? VibratoDefaultEaseInSec;
         var easeOutLength = note.EaseOutLength ?? defaultParameters?.EaseOutLength ?? VibratoDefaultEaseOutSec;
-        var depth = (note.Depth ?? defaultParameters?.Depth ?? VibratoDefaultDepthSemitone) * 0.5;
-        if (depth == 0.0) return points;
         var phase = note.Phase ?? VibratoDefaultPhaseRad;
         var frequency = note.Frequency ?? defaultParameters?.Frequency ?? VibratoDefaultFrequencyHz;
 
@@ -174,8 +168,8 @@ internal static class SynthVPitchConversion
         {
             var sec = tickTimeTransformer.TickToSec(tick);
             if (sec < vibratoStartSec) return 0.0;
-            var easeInFactor = Math.Clamp((sec - vibratoStartSec) / easeInLength, 0.0, 1.0);
-            var easeOutFactor = Math.Clamp((noteEndSec - sec) / easeOutLength, 0.0, 1.0);
+            var easeInFactor = easeInLength == 0 ? 1.0 : Math.Clamp((sec - vibratoStartSec) / easeInLength, 0.0, 1.0);
+            var easeOutFactor = easeOutLength == 0 ? (sec < noteEndSec ? 1.0 : 0.0) : Math.Clamp((noteEndSec - sec) / easeOutLength, 0.0, 1.0);
             var rad = 2 * Math.PI * frequency * secPerTick * (tick - vibratoStartTick) + phase;
             var envelope = vibratoEnv.TryGetValue(tick, out var envVal) ? envVal : 1.0;
             return envelope * depth * easeInFactor * easeOutFactor * Math.Sin(rad);

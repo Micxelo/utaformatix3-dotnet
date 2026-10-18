@@ -27,22 +27,13 @@ public static class Svp
     public static Project Parse(string filePath, ImportParams? importParams = null)
     {
         var parameters = importParams ?? new ImportParams();
-        var text = File.ReadAllText(filePath);
-
-        var rawProjects = text.Split('\0')
-            .Select(s => s.Trim('\0'))
-            .Where(s => !string.IsNullOrWhiteSpace(s))
-            .ToList();
-
-        var projects = rawProjects.Select(json => JsonNode.Parse(json)!.AsObject()).ToList();
-        var project = projects.MaxBy(p => p["version"]?.GetValue<int>() ?? 0)
-            ?? throw new InvalidDataException("No valid SVP project found");
-
         var warnings = new List<ImportWarning>();
+        var input = new SvpInput(parameters, warnings);
+        var project = input.Read(filePath);
 
         var timeSignatures = ParseTimeSignatures(project, warnings);
         var tempos = ParseTempos(project, warnings);
-        var tracks = ParseTracks(project, tempos, parameters);
+        var tracks = ParseTracks(project, tempos, parameters, input);
 
         return new Project(
             Format: Format.Svp,
@@ -64,11 +55,10 @@ public static class Svp
         }
 
         return meterArray
-            .Where(m => m is not null)
             .Select(m => new TimeSignature(
-                MeasurePosition: m!["index"]?.GetValue<int>() ?? 0,
-                Numerator: m["numerator"]?.GetValue<int>() ?? 4,
-                Denominator: m["denominator"]?.GetValue<int>() ?? 4))
+                MeasurePosition: m!["index"]!.GetValue<int>(),
+                Numerator: m["numerator"]!.GetValue<int>(),
+                Denominator: m["denominator"]!.GetValue<int>()))
             .ToList();
     }
 
@@ -82,44 +72,66 @@ public static class Svp
         }
 
         return tempoArray
-            .Where(t => t is not null)
             .Select(t => new Tempo(
-                TickPosition: (t!["position"]?.GetValue<long>() ?? 0L) / TickRate,
-                Bpm: t["bpm"]?.GetValue<double>() ?? Constants.DefaultBpm))
+                TickPosition: t!["position"]!.GetValue<long>() / TickRate,
+                Bpm: t["bpm"]!.GetValue<double>()))
             .ToList();
     }
 
-    private static List<Track> ParseTracks(JsonObject project, List<Tempo> tempos, ImportParams parameters)
+    private static List<Track> ParseTracks(JsonObject project, List<Tempo> tempos, ImportParams parameters, SvpInput input)
     {
         var trackArray = project["tracks"]?.AsArray() ?? [];
-        var library = project["library"]?.AsArray() ?? [];
 
         var sortedTracks = trackArray
-            .Where(t => t is not null)
             .Select(t => t!.AsObject())
             .OrderBy(t => t["dispOrder"]?.GetValue<int>())
             .ToList();
 
         return sortedTracks.Select((trackNode, index) =>
-            ParseTrack(trackNode, library, tempos, index, parameters)).ToList();
+            ParseTrack(trackNode, tempos, index, parameters, input)).ToList();
     }
 
-    private static Track ParseTrack(JsonObject trackNode, JsonArray library, List<Tempo> tempos,
-        int index, ImportParams parameters)
+    private static Track ParseTrack(JsonObject trackNode, List<Tempo> tempos,
+        int index, ImportParams parameters, SvpInput input)
     {
         var trackName = trackNode["name"]?.GetValue<string>() ?? $"Track {index + 1}";
-        var notes = ParseNotes(trackNode, library, parameters.DefaultLyric)
-            .Where(n => n.TickOn >= 0)
-            .ToList();
+        var notes = ParseNotes(trackNode, parameters.DefaultLyric, input).OrderBy(n => n.TickOn).ToList();
+        var validated = new List<Note>();
+        var recoveredOverlap = false;
+        foreach (var note in notes)
+        {
+            if (validated.Count > 0 && note.TickOn < validated[^1].TickOff)
+            {
+                var error = SvpInput.Error("SVP_OVERLAP", input.PathOf(note), "Note overlaps a previous note; lossless monophonic conversion is not possible.");
+                if (!input.Recover) throw error;
+                input.Warn("SVP_DROPPED_NOTE", error.FieldPath, error.Reason);
+                recoveredOverlap = true;
+                continue;
+            }
+            validated.Add(note with { Id = validated.Count });
+        }
 
         PitchModel? pitch = null;
-        if (!parameters.SimpleImport)
-            pitch = ParsePitch(trackNode, library, tempos);
+        if (recoveredOverlap) input.Warn("SVP_DROPPED_PITCH", input.PathOf(trackNode), "Omitted pitch after discarding overlapping notes during recovery.");
+        try
+        {
+            if (!parameters.SimpleImport && !input.SkipPitch(trackNode) && !recoveredOverlap)
+                pitch = ParsePitch(trackNode, tempos, input);
+            if (pitch?.Data.Any(p => p.Value is { } value && !double.IsFinite(value)) == true)
+                throw SvpInput.Error("SVP_RANGE", input.PathOf(trackNode), "Pitch processing produced a non-finite value.");
+        }
+        catch (Exception ex) when (ex is SvpInputException or ArithmeticException or ArgumentException or InvalidOperationException)
+        {
+            var error = ex as SvpInputException ?? SvpInput.Error("SVP_PITCH", input.PathOf(trackNode), ex.Message);
+            if (!input.Recover) throw error;
+            input.Warn("SVP_DROPPED_PITCH", error.FieldPath, error.Reason);
+            pitch = null;
+        }
 
-        return new Track(index, trackName, notes, pitch).ValidateNotes();
+        return new Track(index, trackName, validated, pitch);
     }
 
-    private static List<Note> ParseNotes(JsonObject trackNode, JsonArray library, string defaultLyric)
+    private static List<Note> ParseNotes(JsonObject trackNode, string defaultLyric, SvpInput input)
     {
         var notes = new List<Note>();
         var noteId = 0;
@@ -127,7 +139,7 @@ public static class Svp
         var mainGroup = trackNode["mainGroup"]?.AsObject();
         var mainRef = trackNode["mainRef"]?.AsObject();
         if (mainGroup is not null && mainRef is not null)
-            notes.AddRange(ParseNotesFromGroup(mainRef, mainGroup, defaultLyric, noteId));
+            notes.AddRange(ParseNotesFromGroup(mainRef, input.GroupFor(mainRef), defaultLyric, noteId, input));
         noteId = notes.Count;
 
         var groups = trackNode["groups"]?.AsArray();
@@ -135,53 +147,44 @@ public static class Svp
         {
             foreach (var refNode in groups)
             {
-                if (refNode is null) continue;
-                var refObj = refNode.AsObject();
-                var groupId = refObj["groupID"]?.GetValue<string>();
-                if (groupId is null) continue;
+                var refObj = refNode!.AsObject();
+                var group = input.GroupFor(refObj);
 
-                var group = library
-                    .Where(g => g is not null)
-                    .Select(g => g!.AsObject())
-                    .FirstOrDefault(g => g["uuid"]?.GetValue<string>() == groupId);
-
-                if (group is not null)
-                {
-                    var extraNotes = ParseNotesFromGroup(refObj, group, defaultLyric, noteId);
-                    notes.AddRange(extraNotes);
-                    noteId = notes.Count;
-                }
+                var extraNotes = ParseNotesFromGroup(refObj, group, defaultLyric, noteId, input);
+                notes.AddRange(extraNotes);
+                noteId = notes.Count;
             }
         }
 
         return notes;
     }
 
-    private static List<Note> ParseNotesFromGroup(JsonObject refNode, JsonObject group, string defaultLyric, int startId)
+    private static List<Note> ParseNotesFromGroup(JsonObject refNode, JsonObject group, string defaultLyric, int startId, SvpInput input)
     {
-        var blickOffset = refNode["blickOffset"]?.GetValue<long>() ?? 0L;
-        var pitchOffset = refNode["pitchOffset"]?.GetValue<int>() ?? 0;
+        var blickOffset = refNode["blickOffset"]!.GetValue<long>();
+        var pitchOffset = refNode["pitchOffset"]!.GetValue<int>();
         var noteArray = group["notes"]?.AsArray() ?? [];
 
         return noteArray
-            .Where(n => n is not null)
             .Select((n, i) =>
             {
-                var onset = n!["onset"]?.GetValue<long>() ?? 0L;
-                var duration = n["duration"]?.GetValue<long>() ?? 0L;
-                var key = n["pitch"]?.GetValue<int>() ?? 60;
+                var onset = n!["onset"]!.GetValue<long>();
+                var duration = n["duration"]!.GetValue<long>();
+                var key = n["pitch"]!.GetValue<int>();
                 var lyric = n["lyrics"]?.GetValue<string>();
                 var phoneme = n["phonemes"]?.GetValue<string>();
 
-                var tickOn = (onset + blickOffset) / TickRate;
+                var tickOn = checked(onset + blickOffset) / TickRate;
 
-                return new Note(
+                var note = new Note(
                     Id: startId + i,
-                    Key: key + pitchOffset,
+                    Key: checked(key + pitchOffset),
                     Lyric: IsNullOrBlankLyric(lyric) ? defaultLyric : lyric!,
                     TickOn: tickOn,
-                    TickOff: tickOn + duration / TickRate,
+                    TickOff: checked(tickOn + duration / TickRate),
                     Phoneme: phoneme);
+                input.RecordNote(note, n);
+                return note;
             })
             .ToList();
     }
@@ -192,7 +195,7 @@ public static class Svp
             c is >= '\u001c' and <= '\u001f' ||
             c != '\u0085' && char.IsWhiteSpace(c));
 
-    private static PitchModel? ParsePitch(JsonObject trackNode, JsonArray library, List<Tempo> tempos)
+    private static PitchModel? ParsePitch(JsonObject trackNode, List<Tempo> tempos, SvpInput input)
     {
         var mainPitch = new List<(long Tick, double Value)>();
         var extraPitch = new List<(long Tick, double Value)>();
@@ -200,25 +203,17 @@ public static class Svp
         var mainGroup = trackNode["mainGroup"]?.AsObject();
         var mainRef = trackNode["mainRef"]?.AsObject();
         if (mainGroup is not null && mainRef is not null)
-            mainPitch = ParsePitchFromGroup(mainRef, mainGroup, tempos);
+            mainPitch = ParsePitchFromGroup(mainRef, input.GroupFor(mainRef), tempos);
 
         var groups = trackNode["groups"]?.AsArray();
         if (groups is not null)
         {
             foreach (var refNode in groups)
             {
-                if (refNode is null) continue;
-                var refObj = refNode.AsObject();
-                var groupId = refObj["groupID"]?.GetValue<string>();
-                if (groupId is null) continue;
+                var refObj = refNode!.AsObject();
+                var group = input.GroupFor(refObj);
 
-                var group = library
-                    .Where(g => g is not null)
-                    .Select(g => g!.AsObject())
-                    .FirstOrDefault(g => g["uuid"]?.GetValue<string>() == groupId);
-
-                if (group is not null)
-                    extraPitch.AddRange(ParsePitchFromGroup(refObj, group, tempos));
+                extraPitch.AddRange(ParsePitchFromGroup(refObj, group, tempos));
             }
         }
 
@@ -228,7 +223,7 @@ public static class Svp
 
     private static List<(long Tick, double Value)> ParsePitchFromGroup(JsonObject refNode, JsonObject group, List<Tempo> tempos)
     {
-        var blickOffset = refNode["blickOffset"]?.GetValue<long>() ?? 0L;
+        var blickOffset = refNode["blickOffset"]!.GetValue<long>();
 
         var vibratoDefaultParameters = ParseVibratoDefaults(refNode["voice"]?.AsObject());
 
@@ -270,13 +265,12 @@ public static class Svp
         if (pointsArray is null) return [];
 
         var result = new List<(long Tick, double Value)>();
-        for (var i = 0; i + 1 < pointsArray.Count; i += 2)
+        for (var i = 0; i < pointsArray.Count; i += 2)
         {
-            var rawTick = pointsArray[i]?.GetValue<double>();
-            var centValue = pointsArray[i + 1]?.GetValue<double>();
-            if (rawTick is null || centValue is null) continue;
-            var tick = RoundPitchTick((rawTick.Value + blickOffset) / TickRate);
-            var value = centValue.Value / 100.0;
+            var rawTick = pointsArray[i]!.GetValue<double>();
+            var centValue = pointsArray[i + 1]!.GetValue<double>();
+            var tick = RoundPitchTick((rawTick + blickOffset) / TickRate);
+            var value = centValue / 100.0;
             result.Add((tick, value));
         }
         return result;
@@ -287,13 +281,12 @@ public static class Svp
         if (pointsArray is null) return [];
 
         var result = new List<(long Tick, double Value)>();
-        for (var i = 0; i + 1 < pointsArray.Count; i += 2)
+        for (var i = 0; i < pointsArray.Count; i += 2)
         {
-            var rawTick = pointsArray[i]?.GetValue<double>();
-            var value = pointsArray[i + 1]?.GetValue<double>();
-            if (rawTick is null || value is null) continue;
-            var tick = RoundPitchTick((rawTick.Value + blickOffset) / TickRate);
-            result.Add((tick, value.Value));
+            var rawTick = pointsArray[i]!.GetValue<double>();
+            var value = pointsArray[i + 1]!.GetValue<double>();
+            var tick = RoundPitchTick((rawTick + blickOffset) / TickRate);
+            result.Add((tick, value));
         }
         return result;
     }
@@ -315,18 +308,17 @@ public static class Svp
     {
         if (notesArray is null) return [];
 
-        var blickOffset = refNode["blickOffset"]?.GetValue<long>() ?? 0L;
+        var blickOffset = refNode["blickOffset"]!.GetValue<long>();
 
         return notesArray
-            .Where(n => n is not null)
             .Select(n =>
             {
-                var onset = n!["onset"]?.GetValue<long>() ?? 0L;
-                var duration = n["duration"]?.GetValue<long>() ?? 0L;
+                var onset = n!["onset"]!.GetValue<long>();
+                var duration = n["duration"]!.GetValue<long>();
                 var attrs = n["attributes"]?.AsObject();
 
                 return new SvpNoteWithVibrato(
-                    NoteStartTick: (onset + blickOffset) / TickRate,
+                    NoteStartTick: checked(onset + blickOffset) / TickRate,
                     NoteLengthTick: duration / TickRate,
                     VibratoStart: attrs?["tF0VbrStart"]?.GetValue<double>(),
                     EaseInLength: attrs?["tF0VbrLeft"]?.GetValue<double>(),
@@ -341,6 +333,7 @@ public static class Svp
     public static (byte[] Data, string FileName, List<ExportNotification> Notifications) Generate(
         Project project, IEnumerable<FeatureConfig>? features = null)
     {
+        ValidateForExport(project);
         var featureList = features?.ToList() ?? [];
         var jsonTexts = GenerateContents(project, featureList);
 
@@ -376,7 +369,7 @@ public static class Svp
     public static void GenerateFile(Project project, string filePath, IEnumerable<FeatureConfig>? features = null)
     {
         var (data, _, _) = Generate(project, features);
-        File.WriteAllBytes(filePath, data);
+        AtomicFile.Write(filePath, temporary => File.WriteAllBytes(temporary, data));
     }
 
     private static List<string> GenerateContents(Project project, List<FeatureConfig> features)
@@ -384,8 +377,11 @@ public static class Svp
         var maxTrackCount = features
             .OfType<FeatureConfig.SplitProjectConfig>()
             .FirstOrDefault()?.MaxTrackCount ?? int.MaxValue;
+        if (maxTrackCount <= 0) throw SvpInput.Error("SVP_EXPORT", "$.splitProject", "Track limit must be positive.");
 
-        var trackChunks = project.Tracks.Chunk(maxTrackCount);
+        var trackChunks = project.Tracks.Count == 0
+            ? new[] { Array.Empty<Track>() }
+            : project.Tracks.Chunk(maxTrackCount);
         var results = new List<string>();
 
         foreach (var tracks in trackChunks)
@@ -440,7 +436,7 @@ public static class Svp
         {
             var t = new JsonObject
             {
-                ["position"] = tempo.TickPosition * TickRate,
+                ["position"] = checked(tempo.TickPosition * TickRate),
                 ["bpm"] = tempo.Bpm,
             };
             array.Add((JsonNode?)t);
@@ -464,8 +460,8 @@ public static class Svp
         {
             var noteObj = new JsonObject
             {
-                ["onset"] = note.TickOn * TickRate,
-                ["duration"] = note.Length * TickRate,
+                ["onset"] = checked(note.TickOn * TickRate),
+                ["duration"] = checked(checked(note.TickOff - note.TickOn) * TickRate),
                 ["lyrics"] = note.Lyric,
                 ["phonemes"] = note.Phoneme ?? "",
                 ["pitch"] = note.Key,
@@ -497,7 +493,7 @@ public static class Svp
 
         var svpData = data
             .AppendPitchPointsForSvpOutput()
-            .Select(p => ((double)(p.Tick * TickRate), p.Value * 100.0))
+            .Select(p => ((double)checked(p.Tick * TickRate), p.Value * 100.0))
             .ToList();
 
         var pointsArray = new JsonArray();
@@ -512,5 +508,64 @@ public static class Svp
             ["mode"] = "cosine",
             ["points"] = pointsArray,
         };
+    }
+
+    private static void ValidateForExport(Project project)
+    {
+        void Require(bool valid, string path, string message)
+        { if (!valid) throw SvpInput.Error("SVP_EXPORT", path, message); }
+        void Text(string? value, string path)
+        {
+            if (value is null) return;
+            try { _ = new System.Text.UTF8Encoding(false, true).GetByteCount(value); }
+            catch (System.Text.EncoderFallbackException) { throw SvpInput.Error("SVP_UNICODE", path, "String contains an isolated surrogate."); }
+        }
+        void Position(long tick, string path)
+        {
+            try { _ = checked(tick * TickRate); }
+            catch (OverflowException) { throw SvpInput.Error("SVP_OVERFLOW", path, "Tick cannot be represented as an Int64 SVP position."); }
+        }
+        Require(project.Tempos.Count > 0, "$.tempos", "At least one tempo is required.");
+        Text(project.Name, "$.name");
+        Require(project.TimeSignatures.Count > 0, "$.timeSignatures", "At least one time signature is required.");
+        for (var i = 0; i < project.Tempos.Count; i++)
+        {
+            var tempo = project.Tempos[i];
+            Position(tempo.TickPosition, $"$.tempos[{i}].tickPosition");
+            Require(double.IsFinite(tempo.Bpm) && tempo.Bpm > 0, $"$.tempos[{i}].bpm", "BPM must be finite and positive.");
+            Require(i == 0 || tempo.TickPosition >= project.Tempos[i - 1].TickPosition, "$.tempos", "Tempos must be in chronological order.");
+        }
+        for (var i = 0; i < project.TimeSignatures.Count; i++)
+        {
+            var meter = project.TimeSignatures[i];
+            Require(meter.Numerator > 0 && meter.Denominator > 0, $"$.timeSignatures[{i}]", "Time signature components must be positive.");
+            Require(i == 0 || meter.MeasurePosition >= project.TimeSignatures[i - 1].MeasurePosition, "$.timeSignatures", "Time signatures must be in chronological order.");
+        }
+        for (var ti = 0; ti < project.Tracks.Count; ti++)
+        {
+            var track = project.Tracks[ti];
+            var path = $"$.tracks[{ti}]";
+            Text(track.Name, path + ".name");
+            for (var ni = 0; ni < track.Notes.Count; ni++)
+            {
+                var note = track.Notes[ni];
+                var at = $"{path}.notes[{ni}]";
+                Require(note.TickOn >= 0 && note.TickOff > note.TickOn, at, "Note must have a non-negative start and positive duration.");
+                Require(ni == 0 || note.TickOn >= track.Notes[ni - 1].TickOff, at, "Notes must be ordered and must not overlap.");
+                Position(note.TickOn, at + ".tickOn");
+                Position(note.TickOff, at + ".tickOff");
+                Position(note.Length, at + ".duration");
+                Text(note.Lyric, at + ".lyric"); Text(note.Phoneme, at + ".phoneme");
+            }
+            if (track.Pitch is not null)
+                for (var pi = 0; pi < track.Pitch.Data.Count; pi++)
+                {
+                    var (tick, value) = track.Pitch.Data[pi];
+                    var at = $"{path}.pitch[{pi}]";
+                    Position(tick, at);
+                    Require(pi == 0 || tick >= track.Pitch.Data[pi - 1].Tick, at, "Pitch points must be ordered.");
+                    Require(value is null || double.IsFinite(value.Value * 100), at, "Pitch must be finite in cents.");
+                }
+        }
     }
 }

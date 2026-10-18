@@ -20,8 +20,16 @@ var formatOption = new Option<string?>("--output-format", ["-f"])
 
 var simpleImportOption = new Option<bool>("--simple-import")
 {
-    Description = "Simple import (skip pitch/phonemes)",
+    Description = "Simple import (skip pitch conversion; SVP field validation still applies)",
 };
+
+var recoverOption = new Option<bool>("--recover") { Description = "Recover damaged SVP data with explicit loss diagnostics" };
+var numericStringsOption = new Option<bool>("--svp-numeric-strings") { Description = "Allow SVP numeric strings with a warning (also enabled by --recover)" };
+var svpDefaults = new SvpImportOptions();
+var maxFileOption = new Option<long>("--svp-max-file-bytes") { Description = "Maximum SVP file size in bytes", DefaultValueFactory = _ => svpDefaults.MaxFileBytes };
+var maxDepthOption = new Option<int>("--svp-max-depth") { Description = "Maximum SVP JSON nesting depth (1-1024)", DefaultValueFactory = _ => svpDefaults.MaxDepth };
+var maxTokensOption = new Option<int>("--svp-max-json-tokens") { Description = "Maximum SVP JSON token count", DefaultValueFactory = _ => svpDefaults.MaxJsonTokens };
+var maxSamplesOption = new Option<int>("--svp-max-pitch-samples") { Description = "Maximum SVP pitch processing sample budget", DefaultValueFactory = _ => svpDefaults.MaxPitchSamples };
 
 var defaultLyricOption = new Option<string>("--default-lyric")
 {
@@ -66,6 +74,12 @@ var rootCommand = new RootCommand("UtaFormatix — Convert singing voice synthes
     outputOption,
     formatOption,
     simpleImportOption,
+    recoverOption,
+    numericStringsOption,
+    maxFileOption,
+    maxDepthOption,
+    maxTokensOption,
+    maxSamplesOption,
     defaultLyricOption,
     convertPitchOption,
     convertPhonemesOption,
@@ -88,6 +102,13 @@ rootCommand.SetAction(async (parseResult) =>
     var japaneseLyrics = parseResult.GetValue(japaneseLyricsOption);
     var listFormats = parseResult.GetValue(listFormatsOption);
     var splitProject = parseResult.GetValue(splitProjectOption);
+    var svpOptions = new SvpImportOptions(
+        Recover: parseResult.GetValue(recoverOption),
+        AllowNumericStrings: parseResult.GetValue(numericStringsOption),
+        MaxFileBytes: parseResult.GetValue(maxFileOption),
+        MaxDepth: parseResult.GetValue(maxDepthOption),
+        MaxJsonTokens: parseResult.GetValue(maxTokensOption),
+        MaxPitchSamples: parseResult.GetValue(maxSamplesOption));
 
     if (listFormats)
     {
@@ -119,9 +140,15 @@ rootCommand.SetAction(async (parseResult) =>
 
     Console.WriteLine($"Input:  {input.Name} ({inputFormat.DisplayName})");
 
+    if (inputFormat != Format.Svp && svpOptions != svpDefaults)
+    {
+        Console.Error.WriteLine("Error: recovery and --svp-* options apply only to SVP input.");
+        return 1;
+    }
+
     var importParams = new ImportParams(
         SimpleImport: simpleImport,
-        DefaultLyric: defaultLyric);
+        DefaultLyric: defaultLyric) { Svp = svpOptions };
 
     Project project;
     try
@@ -156,6 +183,9 @@ rootCommand.SetAction(async (parseResult) =>
     {
         var message = warning switch
         {
+            ImportWarning.InputDiagnostic diagnostic => $"{diagnostic.Code} at {diagnostic.Path}: {diagnostic.Message}",
+            ImportWarning.TempoNotFound => "Tempo markers are missing or empty; used default tempo 120 BPM at tick 0.",
+            ImportWarning.TimeSignatureNotFound => "Time signatures are missing or empty; used default time signature 4/4 at measure 0.",
             ImportWarning.DefaultTempoInserted tempo =>
                 $"First tempo event occurs at source tick {tempo.FirstEventTick}; inserted default tempo 120 BPM at tick 0.",
             ImportWarning.DefaultTimeSignatureInserted signature =>
@@ -200,53 +230,56 @@ rootCommand.SetAction(async (parseResult) =>
 
     try
     {
-        switch (outputFormat.Name)
+        AtomicFile.Write(outputPath, temporaryPath =>
         {
-            case nameof(Format.UfData):
-                UfData.GenerateFile(project, outputPath, features);
-                break;
-            case nameof(Format.StandardMid):
-                StandardMid.GenerateFile(project, outputPath, features);
-                break;
-            case nameof(Format.VocaloidMid):
-                VocaloidMid.GenerateFile(project, outputPath, features);
-                break;
-            case nameof(Format.Vsq):
-                Vsq.GenerateFile(project, outputPath, features);
-                break;
-            case nameof(Format.Vsqx):
-                Vsqx.GenerateFile(project, outputPath, features);
-                break;
-            case nameof(Format.Vpr):
-                Vpr.GenerateFile(project, outputPath, features);
-                break;
-            case nameof(Format.Svp):
-                Svp.GenerateFile(project, outputPath, features);
-                break;
-            case nameof(Format.S5p):
-                S5p.GenerateFile(project, outputPath, features);
-                break;
-            case nameof(Format.Ust):
-                Ust.GenerateFile(project, outputPath, features);
-                break;
-            case nameof(Format.Ustx):
-                Ustx.GenerateFile(project, outputPath, features);
-                break;
-            case nameof(Format.MusicXml):
-                MusicXml.GenerateFile(project, outputPath, features);
-                break;
-            case nameof(Format.Ccs):
-                Ccs.GenerateFile(project, outputPath, features);
-                break;
-            case nameof(Format.Dv):
-                Dv.GenerateFile(project, outputPath, features);
-                break;
-            case nameof(Format.Tssln):
-                Tssln.GenerateFile(project, outputPath, features);
-                break;
-            default:
-                throw new NotSupportedException($"Output format '{outputFormat.DisplayName}' is not yet implemented.");
-        }
+            switch (outputFormat.Name)
+            {
+                case nameof(Format.UfData):
+                    UfData.GenerateFile(project, temporaryPath, features);
+                    break;
+                case nameof(Format.StandardMid):
+                    StandardMid.GenerateFile(project, temporaryPath, features);
+                    break;
+                case nameof(Format.VocaloidMid):
+                    VocaloidMid.GenerateFile(project, temporaryPath, features);
+                    break;
+                case nameof(Format.Vsq):
+                    Vsq.GenerateFile(project, temporaryPath, features);
+                    break;
+                case nameof(Format.Vsqx):
+                    Vsqx.GenerateFile(project, temporaryPath, features);
+                    break;
+                case nameof(Format.Vpr):
+                    Vpr.GenerateFile(project, temporaryPath, features);
+                    break;
+                case nameof(Format.Svp):
+                    Svp.GenerateFile(project, temporaryPath, features);
+                    break;
+                case nameof(Format.S5p):
+                    S5p.GenerateFile(project, temporaryPath, features);
+                    break;
+                case nameof(Format.Ust):
+                    Ust.GenerateFile(project, temporaryPath, features);
+                    break;
+                case nameof(Format.Ustx):
+                    Ustx.GenerateFile(project, temporaryPath, features);
+                    break;
+                case nameof(Format.MusicXml):
+                    MusicXml.GenerateFile(project, temporaryPath, features);
+                    break;
+                case nameof(Format.Ccs):
+                    Ccs.GenerateFile(project, temporaryPath, features);
+                    break;
+                case nameof(Format.Dv):
+                    Dv.GenerateFile(project, temporaryPath, features);
+                    break;
+                case nameof(Format.Tssln):
+                    Tssln.GenerateFile(project, temporaryPath, features);
+                    break;
+                default:
+                    throw new NotSupportedException($"Output format '{outputFormat.DisplayName}' is not yet implemented.");
+            }
+        });
     }
     catch (Exception ex)
     {

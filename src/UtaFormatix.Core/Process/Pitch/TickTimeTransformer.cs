@@ -66,6 +66,12 @@ internal sealed class TickTimeTransformer
         return (long)((sec - seg.Offset) / seg.SecPerTick) + seg.RangeStart;
     }
 
+    public long SecToTickChecked(double sec)
+    {
+        var seg = _segments.LastOrDefault(s => s.Offset <= sec) ?? _segments[0];
+        return checked(checked((long)((sec - seg.Offset) / seg.SecPerTick)) + seg.RangeStart);
+    }
+
     public long MilliSecToTick(double milliSec) => SecToTick(milliSec / 1000.0);
 
     private Segment FindSegmentForTick(long tick)
