@@ -97,7 +97,7 @@ public static class Svp
         var sortedTracks = trackArray
             .Where(t => t is not null)
             .Select(t => t!.AsObject())
-            .OrderBy(t => t["dispOrder"]?.GetValue<int>() ?? 0)
+            .OrderBy(t => t["dispOrder"]?.GetValue<int>())
             .ToList();
 
         return sortedTracks.Select((trackNode, index) =>
