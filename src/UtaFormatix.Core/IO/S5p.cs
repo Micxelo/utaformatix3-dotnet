@@ -125,7 +125,7 @@ public static class S5p
                 return new Note(
                     Id: noteId++,
                     Key: key,
-                    Lyric: string.IsNullOrWhiteSpace(lyric) ? defaultLyric : lyric,
+                    Lyric: LyricWhitespace.IsNullOrBlank(lyric) ? defaultLyric : lyric!,
                     TickOn: tickOn,
                     TickOff: tickOn + duration / TickRate);
             })
