@@ -84,7 +84,7 @@ public static class Svp
         return tempoArray
             .Where(t => t is not null)
             .Select(t => new Tempo(
-                TickPosition: (long)((t!["position"]?.GetValue<double>() ?? 0) / TickRate),
+                TickPosition: (t!["position"]?.GetValue<long>() ?? 0L) / TickRate,
                 Bpm: t["bpm"]?.GetValue<double>() ?? Constants.DefaultBpm))
             .ToList();
     }
