@@ -109,20 +109,18 @@ public static class VocaloidMid
     {
         return trackChunks.Skip(1).Select(track =>
         {
-            var sb = new StringBuilder();
+            using var payload = new MemoryStream();
             foreach (var evt in track.Events)
             {
                 if (evt is not TextEvent textEvt) continue;
-                var latin1Bytes = Latin1.GetBytes(textEvt.Text);
-                var text = ShiftJis.GetString(latin1Bytes);
+                var text = textEvt.Text;
                 if (text.Length < 3) continue;
-                text = text[3..];
-                var colonIndex = text.IndexOf(':');
+                var colonIndex = text.IndexOf(':', 3);
                 if (colonIndex < 0) continue;
-                text = text[(colonIndex + 1)..];
-                sb.Append(text);
+                payload.Write(Latin1.GetBytes(text[(colonIndex + 1)..]));
             }
-            return sb.ToString();
+            // A Shift-JIS character can span DM events; decode only after joining their payloads.
+            return ShiftJis.GetString(payload.GetBuffer(), 0, (int)payload.Length);
         }).ToList();
     }
 
@@ -411,11 +409,12 @@ public static class VocaloidMid
             var idString = id.ToString().PadLeft(idStringLength, '0');
             var header = Latin1.GetBytes($"DM:{idString}:");
             var availableByteSize = 127 - header.Length;
-            var chunk = new byte[header.Length + Math.Min(availableByteSize, shiftJisBytes.Length - offset)];
+            var dataByteSize = GetShiftJisChunkLength(shiftJisBytes, offset, availableByteSize);
+            var chunk = new byte[header.Length + dataByteSize];
             Array.Copy(header, 0, chunk, 0, header.Length);
-            Array.Copy(shiftJisBytes, offset, chunk, header.Length, Math.Min(availableByteSize, shiftJisBytes.Length - offset));
+            Array.Copy(shiftJisBytes, offset, chunk, header.Length, dataByteSize);
             textEvents.Add(chunk);
-            offset += availableByteSize;
+            offset += dataByteSize;
         }
 
         foreach (var chunk in textEvents)
@@ -425,6 +424,21 @@ public static class VocaloidMid
         }
 
         return new TrackChunk(events);
+    }
+
+    private static int GetShiftJisChunkLength(byte[] data, int offset, int capacity)
+    {
+        var end = Math.Min(offset + capacity, data.Length);
+        // Start at a character boundary: trail bytes can also fall in a lead-byte range.
+        for (var i = offset; i < end; i++)
+        {
+            if (data[i] is >= 0x81 and <= 0x9f or >= 0xe0 and <= 0xfc)
+            {
+                if (i + 1 == end) return end - offset - 1;
+                i++;
+            }
+        }
+        return end - offset;
     }
 
     private static string GenerateTrackText(Track track, long tickPrefix, int measurePrefix,
