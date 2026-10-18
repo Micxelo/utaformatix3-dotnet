@@ -20,16 +20,22 @@ var formatOption = new Option<string?>("--output-format", ["-f"])
 
 var simpleImportOption = new Option<bool>("--simple-import")
 {
-    Description = "Simple import (skip pitch conversion; SVP field validation still applies)",
+    Description = "Simple import (skip pitch conversion; SVP/S5P field validation still applies)",
 };
 
-var recoverOption = new Option<bool>("--recover") { Description = "Recover damaged SVP data with explicit loss diagnostics" };
+var recoverOption = new Option<bool>("--recover") { Description = "Recover damaged SVP/S5P data with explicit loss diagnostics" };
 var numericStringsOption = new Option<bool>("--svp-numeric-strings") { Description = "Allow SVP numeric strings with a warning (also enabled by --recover)" };
 var svpDefaults = new SvpImportOptions();
 var maxFileOption = new Option<long>("--svp-max-file-bytes") { Description = "Maximum SVP file size in bytes", DefaultValueFactory = _ => svpDefaults.MaxFileBytes };
 var maxDepthOption = new Option<int>("--svp-max-depth") { Description = "Maximum SVP JSON nesting depth (1-1024)", DefaultValueFactory = _ => svpDefaults.MaxDepth };
 var maxTokensOption = new Option<int>("--svp-max-json-tokens") { Description = "Maximum SVP JSON token count", DefaultValueFactory = _ => svpDefaults.MaxJsonTokens };
 var maxSamplesOption = new Option<int>("--svp-max-pitch-samples") { Description = "Maximum SVP pitch processing sample budget", DefaultValueFactory = _ => svpDefaults.MaxPitchSamples };
+var s5pDefaults = new S5pImportOptions();
+var s5pNumericStringsOption = new Option<bool>("--s5p-numeric-strings") { Description = "Allow S5P numeric strings with a warning (also enabled by --recover)" };
+var s5pMaxFileOption = new Option<long>("--s5p-max-file-bytes") { Description = "Maximum S5P file size in bytes", DefaultValueFactory = _ => s5pDefaults.MaxFileBytes };
+var s5pMaxDepthOption = new Option<int>("--s5p-max-depth") { Description = "Maximum S5P JSON nesting depth (1-1024)", DefaultValueFactory = _ => s5pDefaults.MaxDepth };
+var s5pMaxTokensOption = new Option<int>("--s5p-max-json-tokens") { Description = "Maximum S5P JSON token count", DefaultValueFactory = _ => s5pDefaults.MaxJsonTokens };
+var s5pMaxSamplesOption = new Option<int>("--s5p-max-pitch-samples") { Description = "Maximum S5P pitch processing sample budget", DefaultValueFactory = _ => s5pDefaults.MaxPitchSamples };
 
 var defaultLyricOption = new Option<string>("--default-lyric")
 {
@@ -80,6 +86,11 @@ var rootCommand = new RootCommand("UtaFormatix — Convert singing voice synthes
     maxDepthOption,
     maxTokensOption,
     maxSamplesOption,
+    s5pNumericStringsOption,
+    s5pMaxFileOption,
+    s5pMaxDepthOption,
+    s5pMaxTokensOption,
+    s5pMaxSamplesOption,
     defaultLyricOption,
     convertPitchOption,
     convertPhonemesOption,
@@ -109,6 +120,13 @@ rootCommand.SetAction(async (parseResult) =>
         MaxDepth: parseResult.GetValue(maxDepthOption),
         MaxJsonTokens: parseResult.GetValue(maxTokensOption),
         MaxPitchSamples: parseResult.GetValue(maxSamplesOption));
+    var s5pOptions = new S5pImportOptions(
+        Recover: parseResult.GetValue(recoverOption),
+        AllowNumericStrings: parseResult.GetValue(s5pNumericStringsOption),
+        MaxFileBytes: parseResult.GetValue(s5pMaxFileOption),
+        MaxDepth: parseResult.GetValue(s5pMaxDepthOption),
+        MaxJsonTokens: parseResult.GetValue(s5pMaxTokensOption),
+        MaxPitchSamples: parseResult.GetValue(s5pMaxSamplesOption));
 
     if (listFormats)
     {
@@ -140,15 +158,25 @@ rootCommand.SetAction(async (parseResult) =>
 
     Console.WriteLine($"Input:  {input.Name} ({inputFormat.DisplayName})");
 
-    if (inputFormat != Format.Svp && svpOptions != svpDefaults)
+    if (inputFormat != Format.Svp && (svpOptions with { Recover = false }) != svpDefaults)
     {
-        Console.Error.WriteLine("Error: recovery and --svp-* options apply only to SVP input.");
+        Console.Error.WriteLine("Error: --svp-* options apply only to SVP input.");
+        return 1;
+    }
+    if (inputFormat != Format.S5p && (s5pOptions with { Recover = false }) != s5pDefaults)
+    {
+        Console.Error.WriteLine("Error: --s5p-* options apply only to S5P input.");
+        return 1;
+    }
+    if (parseResult.GetValue(recoverOption) && inputFormat != Format.Svp && inputFormat != Format.S5p)
+    {
+        Console.Error.WriteLine("Error: --recover applies only to SVP/S5P input.");
         return 1;
     }
 
     var importParams = new ImportParams(
         SimpleImport: simpleImport,
-        DefaultLyric: defaultLyric) { Svp = svpOptions };
+        DefaultLyric: defaultLyric) { Svp = svpOptions, S5p = s5pOptions };
 
     Project project;
     try

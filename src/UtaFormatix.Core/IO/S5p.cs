@@ -27,18 +27,13 @@ public static class S5p
     public static Project Parse(string filePath, ImportParams? importParams = null)
     {
         var parameters = importParams ?? new ImportParams();
-        var text = File.ReadAllText(filePath);
-
-        var lastIndex = text.LastIndexOf('}');
-        if (lastIndex >= 0)
-            text = text[..(lastIndex + 1)];
-
-        var project = JsonNode.Parse(text)!.AsObject();
         var warnings = new List<ImportWarning>();
+        var input = new S5pInput(parameters, warnings);
+        var project = input.Read(filePath);
 
         var timeSignatures = ParseTimeSignatures(project, warnings);
         var tempos = ParseTempos(project, warnings);
-        var tracks = ParseTracks(project, parameters);
+        var tracks = ParseTracks(project, parameters, input);
 
         return new Project(
             Format: Format.S5p,
@@ -60,11 +55,10 @@ public static class S5p
         }
 
         return meterArray
-            .Where(m => m is not null)
             .Select(m => new TimeSignature(
-                MeasurePosition: m!["measure"]?.GetValue<int>() ?? 0,
-                Numerator: m["beatPerMeasure"]?.GetValue<int>() ?? 4,
-                Denominator: m["beatGranularity"]?.GetValue<int>() ?? 4))
+                MeasurePosition: m!["measure"]!.GetValue<int>(),
+                Numerator: m["beatPerMeasure"]!.GetValue<int>(),
+                Denominator: m["beatGranularity"]!.GetValue<int>()))
             .ToList();
     }
 
@@ -78,32 +72,30 @@ public static class S5p
         }
 
         return tempoArray
-            .Where(t => t is not null)
             .Select(t => new Tempo(
-                TickPosition: (t!["position"]?.GetValue<long>() ?? 0L) / TickRate,
-                Bpm: t["beatPerMinute"]?.GetValue<double>() ?? Constants.DefaultBpm))
+                TickPosition: t!["position"]!.GetValue<long>() / TickRate,
+                Bpm: t["beatPerMinute"]!.GetValue<double>()))
             .ToList();
     }
 
-    private static List<Track> ParseTracks(JsonObject project, ImportParams parameters)
+    private static List<Track> ParseTracks(JsonObject project, ImportParams parameters, S5pInput input)
     {
         var trackArray = project["tracks"]?.AsArray() ?? [];
         return trackArray
-            .Where(t => t is not null)
-            .Select((t, i) => ParseTrack(t!.AsObject(), i, parameters))
+            .Select((t, i) => ParseTrack(t!.AsObject(), i, parameters, input))
             .ToList();
     }
 
-    private static Track ParseTrack(JsonObject trackNode, int index, ImportParams parameters)
+    private static Track ParseTrack(JsonObject trackNode, int index, ImportParams parameters, S5pInput input)
     {
         var trackName = trackNode["name"]?.GetValue<string>() ?? $"Track {index + 1}";
         var notes = ParseNotes(trackNode, parameters.DefaultLyric);
 
         PitchModel? pitch = null;
-        if (!parameters.SimpleImport)
+        if (!parameters.SimpleImport && !input.SkipPitch(trackNode))
             pitch = ParsePitch(trackNode);
 
-        return new Track(index, trackName, notes, pitch).ValidateNotes();
+        return new Track(index, trackName, notes, pitch);
     }
 
     private static List<Note> ParseNotes(JsonObject trackNode, string defaultLyric)
@@ -112,12 +104,11 @@ public static class S5p
         var noteId = 0;
 
         return notesArray
-            .Where(n => n is not null)
             .Select(n =>
             {
-                var onset = n!["onset"]?.GetValue<long>() ?? 0L;
-                var duration = n["duration"]?.GetValue<long>() ?? 0L;
-                var key = n["pitch"]?.GetValue<int>() ?? Constants.DefaultKey;
+                var onset = n!["onset"]!.GetValue<long>();
+                var duration = n["duration"]!.GetValue<long>();
+                var key = n["pitch"]!.GetValue<int>();
                 var lyric = n["lyric"]?.GetValue<string>();
 
                 var tickOn = onset / TickRate;
@@ -141,18 +132,17 @@ public static class S5p
         if (pitchDelta.Count == 0)
             return null;
 
-        var interval = parameters?["interval"]?.GetValue<long>() ?? DefaultInterval;
+        var interval = parameters!["interval"]!.GetValue<long>();
         var tickMultiplier = interval / (double)TickRate;
 
         var points = new List<(long Tick, double? Value)>();
-        for (var i = 0; i + 1 < pitchDelta.Count; i += 2)
+        for (var i = 0; i < pitchDelta.Count; i += 2)
         {
-            var rawTick = pitchDelta[i]?.GetValue<double>();
-            var centValue = pitchDelta[i + 1]?.GetValue<double>();
-            if (rawTick is null || centValue is null) continue;
+            var rawTick = pitchDelta[i]!.GetValue<double>();
+            var centValue = pitchDelta[i + 1]!.GetValue<double>();
 
-            var tick = PitchTickRounding.Round(rawTick.Value * tickMultiplier);
-            var value = centValue.Value / 100.0;
+            var tick = PitchTickRounding.Round(rawTick * tickMultiplier);
+            var value = centValue / 100.0;
             points.Add((tick, value));
         }
 
@@ -177,11 +167,12 @@ public static class S5p
     public static void GenerateFile(Project project, string filePath, IEnumerable<FeatureConfig>? features = null)
     {
         var (data, _, _) = Generate(project, features);
-        File.WriteAllBytes(filePath, data);
+        AtomicFile.Write(filePath, temporary => File.WriteAllBytes(temporary, data));
     }
 
     private static string GenerateContent(Project project, List<FeatureConfig> features)
     {
+        ValidateForExport(project);
         var s5p = JsonNode.Parse(TemplateJson)!.AsObject();
 
         var meterArray = new JsonArray();
@@ -201,7 +192,7 @@ public static class S5p
         {
             tempoArray.Add((JsonNode?)new JsonObject
             {
-                ["position"] = tempo.TickPosition * TickRate,
+                ["position"] = checked(tempo.TickPosition * TickRate),
                 ["beatPerMinute"] = tempo.Bpm,
             });
         }
@@ -233,8 +224,8 @@ public static class S5p
         {
             notesArray.Add((JsonNode?)new JsonObject
             {
-                ["onset"] = note.TickOn * TickRate,
-                ["duration"] = note.Length * TickRate,
+                ["onset"] = checked(note.TickOn * TickRate),
+                ["duration"] = checked(note.Length * TickRate),
                 ["lyric"] = note.Lyric,
                 ["pitch"] = note.Key,
             });
@@ -264,5 +255,61 @@ public static class S5p
         }
 
         return array;
+    }
+
+    private static void ValidateForExport(Project project)
+    {
+        void Require(bool valid, string path, string message)
+        { if (!valid) throw S5pInput.Error("S5P_EXPORT", path, message); }
+        void Text(string? value, string path)
+        {
+            if (value is null) return;
+            try { _ = new System.Text.UTF8Encoding(false, true).GetByteCount(value); }
+            catch (System.Text.EncoderFallbackException) { throw S5pInput.Error("S5P_UNICODE", path, "String contains an isolated surrogate."); }
+        }
+        void Position(long tick, string path)
+        {
+            try { _ = checked(tick * TickRate); }
+            catch (OverflowException) { throw S5pInput.Error("S5P_OVERFLOW", path, "Tick cannot be represented as an Int64 S5P position."); }
+        }
+        Require(project.Tempos.Count > 0, "$.tempos", "At least one tempo is required.");
+        Require(project.TimeSignatures.Count > 0, "$.timeSignatures", "At least one time signature is required.");
+        Text(project.Name, "$.name");
+        for (var i = 0; i < project.Tempos.Count; i++)
+        {
+            var tempo = project.Tempos[i]; var path = $"$.tempos[{i}]";
+            Position(tempo.TickPosition, path + ".tickPosition");
+            Require(double.IsFinite(tempo.Bpm) && tempo.Bpm > 0, path + ".bpm", "BPM must be finite and positive.");
+            Require(i == 0 || tempo.TickPosition >= project.Tempos[i - 1].TickPosition, "$.tempos", "Tempos must be in chronological order.");
+        }
+        for (var i = 0; i < project.TimeSignatures.Count; i++)
+        {
+            var meter = project.TimeSignatures[i]; var path = $"$.timeSignatures[{i}]";
+            Require(meter.Numerator > 0 && meter.Denominator > 0, path, "Time signature components must be positive.");
+            Require(i == 0 || meter.MeasurePosition >= project.TimeSignatures[i - 1].MeasurePosition, "$.timeSignatures", "Time signatures must be in chronological order.");
+        }
+        for (var ti = 0; ti < project.Tracks.Count; ti++)
+        {
+            var track = project.Tracks[ti]; var path = $"$.tracks[{ti}]";
+            Text(track.Name, path + ".name");
+            for (var ni = 0; ni < track.Notes.Count; ni++)
+            {
+                var note = track.Notes[ni]; var at = $"{path}.notes[{ni}]";
+                Require(note.TickOn >= 0 && note.TickOff > note.TickOn, at, "Note must have a non-negative start and positive duration.");
+                Require(ni == 0 || note.TickOn >= track.Notes[ni - 1].TickOff, at, "Notes must be ordered and must not overlap.");
+                Position(note.TickOn, at + ".tickOn"); Position(note.TickOff, at + ".tickOff"); Position(note.Length, at + ".duration");
+                Text(note.Lyric, at + ".lyric");
+            }
+            if (track.Pitch is null) continue;
+            var multiplier = DefaultInterval / (double)TickRate;
+            for (var pi = 0; pi < track.Pitch.Data.Count; pi++)
+            {
+                var (tick, value) = track.Pitch.Data[pi]; var at = $"{path}.pitch[{pi}]";
+                var convertedTick = tick / multiplier * multiplier;
+                Require(double.IsFinite(convertedTick) && convertedTick > long.MinValue && convertedTick < long.MaxValue,
+                    at, "Pitch position cannot be represented on the S5P tick axis.");
+                Require(value is null || double.IsFinite(value.Value * 100), at, "Pitch must be finite in cents.");
+            }
+        }
     }
 }

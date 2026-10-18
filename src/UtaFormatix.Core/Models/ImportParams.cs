@@ -6,4 +6,5 @@ public sealed record ImportParams(
     string DefaultLyric = "あ")
 {
     public SvpImportOptions? Svp { get; init; }
+    public S5pImportOptions? S5p { get; init; }
 }
