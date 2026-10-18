@@ -178,13 +178,19 @@ public static class Svp
                 return new Note(
                     Id: startId + i,
                     Key: key + pitchOffset,
-                    Lyric: string.IsNullOrWhiteSpace(lyric) ? defaultLyric : lyric,
+                    Lyric: IsNullOrBlankLyric(lyric) ? defaultLyric : lyric!,
                     TickOn: tickOn,
                     TickOff: tickOn + duration / TickRate,
                     Phoneme: phoneme);
             })
             .ToList();
     }
+
+    // Match Kotlin's blank predicate: NEXT LINE is text, while U+001C-U+001F are blank.
+    private static bool IsNullOrBlankLyric(string? lyric) =>
+        lyric is null || lyric.All(c =>
+            c is >= '\u001c' and <= '\u001f' ||
+            c != '\u0085' && char.IsWhiteSpace(c));
 
     private static PitchModel? ParsePitch(JsonObject trackNode, JsonArray library, List<Tempo> tempos)
     {
