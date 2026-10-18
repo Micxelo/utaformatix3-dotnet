@@ -151,7 +151,7 @@ public static class S5p
             var centValue = pitchDelta[i + 1]?.GetValue<double>();
             if (rawTick is null || centValue is null) continue;
 
-            var tick = (long)Math.Round(rawTick.Value * tickMultiplier);
+            var tick = PitchTickRounding.Round(rawTick.Value * tickMultiplier);
             var value = centValue.Value / 100.0;
             points.Add((tick, value));
         }

@@ -269,7 +269,7 @@ public static class Svp
         {
             var rawTick = pointsArray[i]!.GetValue<double>();
             var centValue = pointsArray[i + 1]!.GetValue<double>();
-            var tick = RoundPitchTick((rawTick + blickOffset) / TickRate);
+            var tick = PitchTickRounding.Round((rawTick + blickOffset) / TickRate);
             var value = centValue / 100.0;
             result.Add((tick, value));
         }
@@ -285,23 +285,10 @@ public static class Svp
         {
             var rawTick = pointsArray[i]!.GetValue<double>();
             var value = pointsArray[i + 1]!.GetValue<double>();
-            var tick = RoundPitchTick((rawTick + blickOffset) / TickRate);
+            var tick = PitchTickRounding.Round((rawTick + blickOffset) / TickRate);
             result.Add((tick, value));
         }
         return result;
-    }
-
-    private static long RoundPitchTick(double tick)
-    {
-        // Match Kotlin roundToLong: nearest integer, with ties toward positive infinity.
-        // Compare the fraction directly to preserve values adjacent to a half tick.
-        var integral = Math.Truncate(tick);
-        var fraction = tick - integral;
-        if (fraction >= 0.5)
-            integral += 1;
-        else if (fraction < -0.5)
-            integral -= 1;
-        return (long)integral;
     }
 
     private static List<SvpNoteWithVibrato> ParseNotesWithVibrato(JsonArray? notesArray, JsonObject refNode)
