@@ -226,12 +226,12 @@ public static class VocaloidMid
 
     private static Track ParseTrack(string trackAsText, int trackId, long tickPrefix, ImportParams parameters)
     {
-        var lines = trackAsText.Split(['\r', '\n']).Select(l => l.Trim()).Where(l => l.Length > 0).ToList();
+        var lines = trackAsText.Split(['\r', '\n']).Select(l => l.TrimStart()).Where(l => l.Length > 0).ToList();
         var titleWithIndexes = new List<(string Title, int Index)>();
 
         for (var i = 0; i < lines.Count; i++)
         {
-            var line = lines[i];
+            var line = lines[i].TrimEnd();
             if (line.StartsWith('[') && line.EndsWith(']'))
                 titleWithIndexes.Add((line[1..^1], i));
         }
@@ -248,7 +248,8 @@ public static class VocaloidMid
                 if (eqIndex < 0) continue;
                 var key = lines[j][..eqIndex];
                 var value = lines[j][(eqIndex + 1)..];
-                section[key] = value;
+                // Track-name whitespace is data; keep legacy trimming for other fields.
+                section[key] = title == "Common" && key == "Name" ? value : value.TrimEnd();
             }
             sectionMap[title] = section;
         }
