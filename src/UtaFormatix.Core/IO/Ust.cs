@@ -92,15 +92,22 @@ public static class Ust
     private static string ReadFileContent(string filePath)
     {
         var binary = File.ReadAllBytes(filePath);
+        var bytes = binary.AsSpan();
+        if (bytes.StartsWith((ReadOnlySpan<byte>)[0xff, 0xfe]) ||
+            bytes.StartsWith((ReadOnlySpan<byte>)[0xfe, 0xff]) ||
+            bytes.StartsWith((ReadOnlySpan<byte>)[0x00, 0x00, 0xfe, 0xff]))
+            throw new ProjectInputException("UST_ENCODING", $"{filePath}:1 (Encoding)",
+                "UTF-16 and UTF-32 UST files are not supported. Use UTF-8 or Shift-JIS.");
+        if (bytes.StartsWith((ReadOnlySpan<byte>)[0xef, 0xbb, 0xbf])) bytes = bytes[3..];
         try
         {
             var utf8Strict = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
-            var text = utf8Strict.GetString(binary);
+            var text = utf8Strict.GetString(bytes);
             return text;
         }
         catch (DecoderFallbackException)
         {
-            return ShiftJis.GetString(binary);
+            return ShiftJis.GetString(bytes);
         }
     }
 
@@ -318,7 +325,7 @@ public static class Ust
         value = null;
         var prefix = key + "=";
         var isLyric = key == "Lyric";
-        if (!line.StartsWith(prefix, isLyric ? StringComparison.Ordinal : StringComparison.CurrentCulture)) return false;
+        if (!line.StartsWith(prefix, StringComparison.Ordinal)) return false;
         var eqIndex = line.IndexOf('=');
         if (eqIndex < 0 || eqIndex >= line.Length - 1) return false;
         var raw = line[(eqIndex + 1)..];

@@ -41,9 +41,7 @@ internal static class UstInput
 
             foreach (var field in NumericFields)
             {
-                // Use the parser's existing field matching until syntax policy is
-                // changed separately; malformed aliases must not bypass validation.
-                if (!line.StartsWith(field + "=", StringComparison.CurrentCulture)) continue;
+                if (!line.StartsWith(field + "=", StringComparison.Ordinal)) continue;
                 var value = line[(line.IndexOf('=') + 1)..];
                 var path = At(lineNumber, field);
                 var cells = field == "PBS" ? value.Split([';', ','])
