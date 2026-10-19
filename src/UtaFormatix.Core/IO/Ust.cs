@@ -413,7 +413,7 @@ public static class Ust
                 var restOn = tickPos;
                 string? noteBpm = null;
 
-                if (nextTempo is not null && nextTempo.TickPosition >= restOn && nextTempo.TickPosition < note.TickOn)
+                while (nextTempo is not null && nextTempo.TickPosition >= restOn && nextTempo.TickPosition < note.TickOn)
                 {
                     if (nextTempo.TickPosition > restOn)
                     {
@@ -422,12 +422,15 @@ public static class Ust
                         AppendLine($"Length={nextTempo.TickPosition - restOn}");
                         AppendLine("Lyric=R");
                         AppendLine("NoteNum=60");
+                        if (noteBpm is not null)
+                            AppendLine($"Tempo={noteBpm}");
                         AppendLine("PreUtterance=");
                         restCount++;
                     }
                     restOn = nextTempo.TickPosition;
                     noteBpm = FormatTempo(nextTempo.Bpm);
                     IncreaseNextTempoIndex();
+                    nextTempo = GetNextTempo();
                 }
 
                 var restNoteNumber2 = (note.Id + restCount).ToString().PadLeft(4, '0');
