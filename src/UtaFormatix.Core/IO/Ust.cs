@@ -322,11 +322,15 @@ public static class Ust
     {
         value = null;
         var prefix = key + "=";
-        if (!line.StartsWith(prefix)) return false;
+        var isLyric = key == "Lyric";
+        if (!line.StartsWith(prefix, isLyric ? StringComparison.Ordinal : StringComparison.CurrentCulture)) return false;
         var eqIndex = line.IndexOf('=');
         if (eqIndex < 0 || eqIndex >= line.Length - 1) return false;
         var raw = line[(eqIndex + 1)..];
-        if (string.IsNullOrWhiteSpace(raw)) return false;
+        var isBlank = isLyric
+            ? LyricWhitespace.IsNullOrBlank(raw)
+            : string.IsNullOrWhiteSpace(raw);
+        if (isBlank) return false;
         value = raw;
         return true;
     }
