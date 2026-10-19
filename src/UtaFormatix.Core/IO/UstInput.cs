@@ -32,9 +32,7 @@ internal static class UstInput
             if (section.StartsWith("[#", StringComparison.Ordinal) && section.EndsWith(']'))
             {
                 FinishSection();
-                var index = section.AsSpan(2, section.Length - 3);
-                if (index.Length > 0 && (index[0] == '+' || index[0] == '-')) index = index[1..];
-                noteSection = index.Length > 0 && !index.ContainsAnyExceptInRange('0', '9') ? section : null;
+                noteSection = IsNoteSection(section) ? section : null;
                 sectionLine = lineNumber;
                 hasLength = false;
             }
@@ -72,6 +70,14 @@ internal static class UstInput
         }
         FinishSection();
         return lengths;
+    }
+
+    public static bool IsNoteSection(string section)
+    {
+        if (!section.StartsWith("[#", StringComparison.Ordinal) || !section.EndsWith(']')) return false;
+        var index = section.AsSpan(2, section.Length - 3);
+        if (index.Length > 0 && (index[0] == '+' || index[0] == '-')) index = index[1..];
+        return index.Length > 0 && !index.ContainsAnyExceptInRange('0', '9');
     }
 
     private static void RejectNonFinite(string text, string path)

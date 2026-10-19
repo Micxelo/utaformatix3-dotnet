@@ -31,14 +31,15 @@ public static class Ust
             if (!parameters.SimpleImport)
             {
                 pitch = result.IsMode2
-                    ? UtauMode2PitchConversion.PitchFromUtauMode2Track(result.PitchDataMode2, result.Notes, result.Tempos)
+                    ? UtauMode2PitchConversion.PitchFromUtauMode2Track(result.PitchDataMode2, result.Notes,
+                        result.Tempos.Count > 0 ? result.Tempos : [new Tempo(0, Constants.DefaultBpm)])
                     : UtauMode1PitchConversion.PitchFromUtauMode1Track(result.PitchDataMode1, result.Notes);
             }
 
             tracks.Add(new Track(i, result.FileName, result.Notes, pitch).ValidateNotes());
         }
 
-        var warnings = new List<ImportWarning>();
+        var warnings = results.SelectMany(r => r.Warnings).ToList();
         var tempos = ResolveTempos(results, warnings);
 
         return new Project(
@@ -86,6 +87,7 @@ public static class Ust
         var lines = UstEncoding.ReadFile(filePath, options)
             .Split(["\r\n", "\n", "\r"], StringSplitOptions.None);
         var lengths = UstInput.Validate(lines, filePath);
+        var warnings = new List<ImportWarning>();
 
         string? projectName = null;
         var notes = new List<Note>();
@@ -106,9 +108,80 @@ public static class Ust
         List<double>? pendingPBY = null;
         List<string>? pendingPBM = null;
         List<double>? pendingVBR = null;
+        string? pendingSection = null;
+        var pendingSectionLine = 0;
+        int? pendingLyricLine = null;
+        int? pendingKeyLine = null;
+        List<int>? pendingInvalidKeyLines = null;
+        var pendingRest = false;
+        var unterminatedSection = false;
+        var lastSectionLine = 0;
+
+        void Warn(string code, int lineNumber, string field, string message) =>
+            warnings.Add(new ImportWarning.InputDiagnostic(code, $"{filePath}:{lineNumber + 1} ({field})", message));
 
         double GetCurrentTempo() =>
             tempos.Count > 0 ? tempos.MaxBy(kv => kv.Key).Value : Constants.DefaultBpm;
+
+        void FinishNote()
+        {
+            if (pendingNoteKey is not null && pendingNoteLyric is not null &&
+                pendingNoteTickOn is not null && pendingNoteTickOff is not null)
+            {
+                notes.Add(new Note(notes.Count, pendingNoteKey.Value, pendingNoteLyric,
+                    pendingNoteTickOn.Value, pendingNoteTickOff.Value));
+                notePitchDataListMode2.Add(new UtauMode2NotePitchData(GetCurrentTempo(),
+                    pendingPBS?.Start, pendingPBS?.StartShift, pendingPBW ?? [], pendingPBY ?? [],
+                    pendingPBM ?? [], ParseVibrato(pendingVBR)));
+                notePitchDataListMode1.Add(new UtauMode1NotePitchData(pendingPitchBend));
+            }
+            else if (pendingSection is not null && !pendingRest)
+            {
+                var missing = new List<string>();
+                if (pendingNoteLyric is null) missing.Add("Lyric is missing or blank");
+                if (pendingNoteKey is null) missing.Add("NoteNum is missing, blank or not a valid Int32 integer");
+                if (pendingNoteTickOn is null || pendingNoteTickOff is null) missing.Add("Length is missing");
+                var line = pendingNoteLyric is null ? pendingLyricLine : pendingKeyLine;
+                var field = pendingNoteLyric is null ? "Lyric" : pendingNoteKey is null ? "NoteNum" : "Length";
+                Warn("UST_NOTE_SKIPPED", line ?? pendingSectionLine, $"{pendingSection}.{field}",
+                    $"Skipped note: {string.Join("; ", missing)}.");
+            }
+            if ((pendingNoteKey is not null || pendingRest) && pendingInvalidKeyLines is not null)
+                foreach (var line in pendingInvalidKeyLines)
+                    Warn("UST_INVALID_VALUE", line, "NoteNum", "Ignored invalid NoteNum; used the valid value in this section or kept the rest.");
+        }
+
+        List<double> ParsePitchNumbers(string text, string field, int lineNumber, bool discardInvalid = false)
+        {
+            var cells = text.Split(',');
+            var values = new List<double>(cells.Length);
+            var invalidCount = 0;
+            var firstInvalid = 0;
+            for (var i = 0; i < cells.Length; i++)
+            {
+                if (double.TryParse(cells[i], System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture, out var value))
+                {
+                    values.Add(value);
+                }
+                else
+                {
+                    if (!discardInvalid) values.Add(0.0);
+                    // Preserve the zero shorthand for empty Mode 1/2 cells. Vibrato
+                    // cells are removed by the existing parser, shifting values.
+                    if (discardInvalid || !string.IsNullOrWhiteSpace(cells[i]))
+                    {
+                        if (invalidCount == 0) firstInvalid = i;
+                        invalidCount++;
+                    }
+                }
+            }
+            if (invalidCount > 0)
+                Warn("UST_INVALID_VALUE", lineNumber, $"{field}[{firstInvalid}]",
+                    discardInvalid ? $"Ignored {invalidCount} invalid numeric cell(s) in {field}; later values shift left."
+                        : $"Replaced {invalidCount} invalid numeric cell(s) in {field} with zero.");
+            return values;
+        }
 
         for (var lineNumber = 0; lineNumber < lines.Length; lineNumber++)
         {
@@ -136,6 +209,8 @@ public static class Ust
                         pendingBpm = bpm;
                     }
                 }
+                else
+                    Warn("UST_INVALID_VALUE", lineNumber, "Tempo", "Ignored invalid Tempo; kept the previous or default tempo.");
             }
 
             if (line.Contains("Mode2=True")) isMode2 = true;
@@ -143,29 +218,7 @@ public static class Ust
 
             if (line.Contains("[#"))
             {
-                if (pendingNoteKey is not null &&
-                    pendingNoteLyric is not null &&
-                    pendingNoteTickOn is not null &&
-                    pendingNoteTickOff is not null)
-                {
-                    notes.Add(new Note(
-                        notes.Count,
-                        pendingNoteKey.Value,
-                        pendingNoteLyric,
-                        pendingNoteTickOn.Value,
-                        pendingNoteTickOff.Value));
-
-                    notePitchDataListMode2.Add(new UtauMode2NotePitchData(
-                        GetCurrentTempo(),
-                        pendingPBS?.Start,
-                        pendingPBS?.StartShift,
-                        pendingPBW ?? [],
-                        pendingPBY ?? [],
-                        pendingPBM ?? [],
-                        ParseVibrato(pendingVBR)));
-
-                    notePitchDataListMode1.Add(new UtauMode1NotePitchData(pendingPitchBend));
-                }
+                FinishNote();
 
                 pendingNoteKey = null;
                 pendingNoteLyric = null;
@@ -177,6 +230,18 @@ public static class Ust
                 pendingPBM = null;
                 pendingVBR = null;
                 pendingPitchBend = null;
+                pendingSection = UstInput.IsNoteSection(line) ? line : null;
+                pendingSectionLine = lineNumber;
+                pendingLyricLine = null;
+                pendingKeyLine = null;
+                pendingInvalidKeyLines = null;
+                pendingRest = false;
+                if (pendingSection is not null)
+                {
+                    unterminatedSection = true;
+                    lastSectionLine = lineNumber;
+                }
+                if (line == "[#TRACKEND]") unterminatedSection = false;
             }
 
             if (lengths.TryGetValue(lineNumber, out var length))
@@ -191,16 +256,21 @@ public static class Ust
                 pendingNoteTickOff = time;
             }
 
+            if (line.StartsWith("Lyric=", StringComparison.Ordinal)) pendingLyricLine = lineNumber;
             if (TryGetValue(line, "Lyric", out var lyricVal))
             {
+                pendingRest = lyricVal is "R" or "r";
                 if (lyricVal != "R" && lyricVal != "r")
                     pendingNoteLyric = lyricVal;
             }
 
+            if (line.StartsWith("NoteNum=", StringComparison.Ordinal)) pendingKeyLine = lineNumber;
             if (TryGetValue(line, "NoteNum", out var noteNumVal))
             {
                 if (int.TryParse(noteNumVal, out var key))
                     pendingNoteKey = key;
+                else
+                    (pendingInvalidKeyLines ??= []).Add(lineNumber);
             }
 
             if (isMode2)
@@ -216,38 +286,55 @@ public static class Ust
                                 System.Globalization.CultureInfo.InvariantCulture, out var ss) ? ss : null
                             : null;
                         pendingPBS = (start, startShift);
+                        if (cells.Length > 1 && !string.IsNullOrWhiteSpace(cells[1]) && startShift is null)
+                            Warn("UST_INVALID_VALUE", lineNumber, "PBS[1]", "Ignored invalid PBS start shift; used the default shift.");
                     }
+                    else
+                        Warn("UST_INVALID_VALUE", lineNumber, "PBS[0]", "Ignored invalid PBS start; kept the previous curve start if present.");
+                    if (cells.Skip(2).Any(c => !string.IsNullOrWhiteSpace(c)))
+                        Warn("UST_PITCH_IGNORED", lineNumber, "PBS[2]", "Ignored PBS cells after the start and optional start shift.");
                 }
 
                 if (TryGetValue(line, "PBW", out var pbwVal))
-                    pendingPBW = pbwVal.Split(',').Select(w =>
-                        double.TryParse(w, System.Globalization.NumberStyles.Float,
-                            System.Globalization.CultureInfo.InvariantCulture, out var v) ? v : 0.0).ToList();
+                    pendingPBW = ParsePitchNumbers(pbwVal, "PBW", lineNumber);
 
                 if (TryGetValue(line, "PBY", out var pbyVal))
-                    pendingPBY = pbyVal.Split(',').Select(s =>
-                        double.TryParse(s, System.Globalization.NumberStyles.Float,
-                            System.Globalization.CultureInfo.InvariantCulture, out var v) ? v : 0.0).ToList();
+                    pendingPBY = ParsePitchNumbers(pbyVal, "PBY", lineNumber);
 
                 if (TryGetValue(line, "PBM", out var pbmVal))
+                {
                     pendingPBM = pbmVal.Split(',').ToList();
+                    var invalidCurve = pendingPBM.FindIndex(c => c is not ("" or "s" or "j" or "r"));
+                    if (invalidCurve >= 0)
+                        Warn("UST_INVALID_VALUE", lineNumber, $"PBM[{invalidCurve}]",
+                            "Unknown pitch curve type; used the default cosine ease-in-out interpolation for unsupported curves.");
+                }
 
                 if (TryGetValue(line, "VBR", out var vbrVal))
-                    pendingVBR = vbrVal.Split(',')
-                        .Where(c => double.TryParse(c, System.Globalization.NumberStyles.Float,
-                            System.Globalization.CultureInfo.InvariantCulture, out _))
-                        .Select(c => double.Parse(c, System.Globalization.CultureInfo.InvariantCulture))
-                        .ToList();
+                {
+                    pendingVBR = ParsePitchNumbers(vbrVal, "VBR", lineNumber, discardInvalid: true);
+                    if (pendingVBR.Count < 2)
+                        Warn("UST_PITCH_IGNORED", lineNumber, "VBR", "Ignored vibrato data with fewer than two numeric parameters.");
+                    else if (pendingVBR.Count > 7)
+                        Warn("UST_PITCH_IGNORED", lineNumber, "VBR[7]", "Ignored vibrato parameters after the seventh value.");
+                }
             }
             else
             {
                 if (TryGetValue(line, "Piches", out var pichesVal) && pendingPitchBend is null)
-                    pendingPitchBend = ParseMode1PitchData(pichesVal);
+                    pendingPitchBend = ParsePitchNumbers(pichesVal, "Piches", lineNumber);
                 else if (TryGetValue(line, "Pitches", out var pitchesVal) && pendingPitchBend is null)
-                    pendingPitchBend = ParseMode1PitchData(pitchesVal);
+                    pendingPitchBend = ParsePitchNumbers(pitchesVal, "Pitches", lineNumber);
                 else if (TryGetValue(line, "PitchBend", out var pitchBendVal) && pendingPitchBend is null)
-                    pendingPitchBend = ParseMode1PitchData(pitchBendVal);
+                    pendingPitchBend = ParsePitchNumbers(pitchBendVal, "PitchBend", lineNumber);
             }
+        }
+
+        if (unterminatedSection)
+        {
+            FinishNote();
+            Warn("UST_MISSING_TRACKEND", lastSectionLine, "TRACKEND",
+                "Missing [#TRACKEND]; completed the final section at end of file.");
         }
 
         var tempoList = tempos.Select(kv => new Tempo(kv.Key, kv.Value))
@@ -268,7 +355,8 @@ public static class Ust
             tempoList,
             isMode2,
             pitchDataMode1,
-            pitchDataMode2);
+            pitchDataMode2,
+            warnings);
     }
 
     private static UtauNoteVibratoParams? ParseVibrato(List<double>? vbr)
@@ -283,12 +371,6 @@ public static class Ust
             vbr.Count > 5 ? vbr[5] : 0.0,
             vbr.Count > 6 ? vbr[6] : 0.0);
     }
-
-    private static List<double> ParseMode1PitchData(string pitchString) =>
-        pitchString.Split(',')
-            .Select(s => double.TryParse(s, System.Globalization.NumberStyles.Float,
-                System.Globalization.CultureInfo.InvariantCulture, out var v) ? v : 0.0)
-            .ToList();
 
     private static bool TryGetValue(string line, string key, [NotNullWhen(true)] out string? value)
     {
@@ -314,7 +396,8 @@ public static class Ust
         List<Tempo> Tempos,
         bool IsMode2,
         UtauMode1TrackPitchData? PitchDataMode1,
-        UtauMode2TrackPitchData? PitchDataMode2);
+        UtauMode2TrackPitchData? PitchDataMode2,
+        List<ImportWarning> Warnings);
 
     public static (byte[] Data, string FileName, List<ExportNotification> Notifications) Generate(
         Project project, IEnumerable<FeatureConfig>? features = null)
