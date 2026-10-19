@@ -2,10 +2,10 @@ using System.CommandLine;
 using UtaFormatix.Core.IO;
 using UtaFormatix.Core.Models;
 
-var inputArg = new Argument<FileInfo?>("input")
+var inputArg = new Argument<FileInfo[]>("input")
 {
-    Description = "Input project file",
-    Arity = ArgumentArity.ZeroOrOne,
+    Description = "Input project file(s); multiple UST files are combined in argument order",
+    Arity = ArgumentArity.ZeroOrMore,
 };
 
 var outputOption = new Option<FileInfo?>("--output", ["-o"])
@@ -21,6 +21,16 @@ var formatOption = new Option<string?>("--output-format", ["-f"])
 var simpleImportOption = new Option<bool>("--simple-import")
 {
     Description = "Simple import (skip pitch conversion; SVP/S5P field validation still applies)",
+};
+
+var ustImportEncodingOption = new Option<string?>("--ust-import-encoding")
+{
+    Description = "UST input encoding name or code page (default: auto; BOM, UTF-8, then Shift-JIS)",
+};
+
+var ustExportEncodingOption = new Option<string?>("--ust-export-encoding")
+{
+    Description = "UST output encoding name or code page (default: shift_jis / 932)",
 };
 
 var recoverOption = new Option<bool>("--recover") { Description = "Recover damaged SVP/S5P data with explicit loss diagnostics" };
@@ -80,6 +90,8 @@ var rootCommand = new RootCommand("UtaFormatix — Convert singing voice synthes
     outputOption,
     formatOption,
     simpleImportOption,
+    ustImportEncodingOption,
+    ustExportEncodingOption,
     recoverOption,
     numericStringsOption,
     maxFileOption,
@@ -102,10 +114,12 @@ var rootCommand = new RootCommand("UtaFormatix — Convert singing voice synthes
 
 rootCommand.SetAction(async (parseResult) =>
 {
-    var input = parseResult.GetValue(inputArg);
+    var inputs = parseResult.GetValue(inputArg) ?? [];
     var output = parseResult.GetValue(outputOption);
     var formatName = parseResult.GetValue(formatOption);
     var simpleImport = parseResult.GetValue(simpleImportOption);
+    var ustImportEncoding = parseResult.GetValue(ustImportEncodingOption);
+    var ustExportEncoding = parseResult.GetValue(ustExportEncodingOption);
     var defaultLyric = parseResult.GetValue(defaultLyricOption)!;
     var convertPitch = parseResult.GetValue(convertPitchOption);
     var convertPhonemes = parseResult.GetValue(convertPhonemesOption);
@@ -140,11 +154,18 @@ rootCommand.SetAction(async (parseResult) =>
         return 0;
     }
 
-    if (input is null || !input.Exists)
+    if (inputs.Length == 0)
     {
-        Console.Error.WriteLine($"Error: input file not found: {input?.FullName ?? "(null)"}");
+        Console.Error.WriteLine("Error: no input files specified.");
         return 1;
     }
+    foreach (var file in inputs)
+    {
+        if (file.Exists) continue;
+        Console.Error.WriteLine($"Error: input file not found: {file.FullName}");
+        return 1;
+    }
+    var input = inputs[0];
 
     var implementedImportFormats = new HashSet<string>([nameof(Format.UfData), nameof(Format.StandardMid), nameof(Format.VocaloidMid), nameof(Format.Vsq), nameof(Format.Vsqx), nameof(Format.Vpr), nameof(Format.Svp), nameof(Format.S5p), nameof(Format.Ust), nameof(Format.Ustx), nameof(Format.MusicXml), nameof(Format.Ccs), nameof(Format.Dv), nameof(Format.Ppsf), nameof(Format.Tssln)]);
     var inputExt = input.Extension.TrimStart('.').ToLowerInvariant();
@@ -156,7 +177,23 @@ rootCommand.SetAction(async (parseResult) =>
         return 1;
     }
 
-    Console.WriteLine($"Input:  {input.Name} ({inputFormat.DisplayName})");
+    if (inputs.Length > 1)
+    {
+        if (inputFormat != Format.Ust)
+        {
+            Console.Error.WriteLine("Error: multiple input files are supported only for UST.");
+            return 1;
+        }
+        foreach (var file in inputs)
+        {
+            if (inputFormat.MatchExtension(file.Extension.TrimStart('.'))) continue;
+            Console.Error.WriteLine($"Error: all input files must be UST files; incompatible input: {file.FullName}");
+            return 1;
+        }
+    }
+
+    foreach (var file in inputs)
+        Console.WriteLine($"Input:  {file.Name} ({inputFormat.DisplayName})");
 
     if (inputFormat != Format.Svp && (svpOptions with { Recover = false }) != svpDefaults)
     {
@@ -168,6 +205,11 @@ rootCommand.SetAction(async (parseResult) =>
         Console.Error.WriteLine("Error: --s5p-* options apply only to S5P input.");
         return 1;
     }
+    if (inputFormat != Format.Ust && ustImportEncoding is not null)
+    {
+        Console.Error.WriteLine("Error: --ust-import-encoding applies only to UST input.");
+        return 1;
+    }
     if (parseResult.GetValue(recoverOption) && inputFormat != Format.Svp && inputFormat != Format.S5p)
     {
         Console.Error.WriteLine("Error: --recover applies only to SVP/S5P input.");
@@ -176,7 +218,7 @@ rootCommand.SetAction(async (parseResult) =>
 
     var importParams = new ImportParams(
         SimpleImport: simpleImport,
-        DefaultLyric: defaultLyric) { Svp = svpOptions, S5p = s5pOptions };
+        DefaultLyric: defaultLyric) { Svp = svpOptions, S5p = s5pOptions, Ust = new UstImportOptions(ustImportEncoding) };
 
     Project project;
     try
@@ -191,7 +233,7 @@ rootCommand.SetAction(async (parseResult) =>
             nameof(Format.Vpr) => Vpr.Parse(input.FullName, importParams),
             nameof(Format.Svp) => Svp.Parse(input.FullName, importParams),
             nameof(Format.S5p) => S5p.Parse(input.FullName, importParams),
-            nameof(Format.Ust) => Ust.Parse(input.FullName, importParams),
+            nameof(Format.Ust) => Ust.Parse(inputs.Select(file => file.FullName).ToArray(), importParams),
             nameof(Format.Ustx) => Ustx.Parse(input.FullName, importParams),
             nameof(Format.MusicXml) => MusicXml.Parse(input.FullName, importParams),
             nameof(Format.Ccs) => Ccs.Parse(input.FullName, importParams),
@@ -243,6 +285,11 @@ rootCommand.SetAction(async (parseResult) =>
     if (outputFormat is null)
     {
         Console.Error.WriteLine("Error: could not determine output format. Use -f or -o with a recognized extension.");
+        return 1;
+    }
+    if (outputFormat != Format.Ust && ustExportEncoding is not null)
+    {
+        Console.Error.WriteLine("Error: --ust-export-encoding applies only to UST output.");
         return 1;
     }
 
@@ -308,7 +355,8 @@ rootCommand.SetAction(async (parseResult) =>
                     S5p.GenerateFile(project, temporaryPath, features);
                     break;
                 case nameof(Format.Ust):
-                    Ust.GenerateFile(project, temporaryPath, features);
+                    Ust.GenerateFile(project, temporaryPath, features,
+                        ustExportEncoding is null ? null : new UstExportOptions(ustExportEncoding));
                     break;
                 case nameof(Format.Ustx):
                     Ustx.GenerateFile(project, temporaryPath, features);

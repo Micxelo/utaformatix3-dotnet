@@ -7,4 +7,5 @@ public sealed record ImportParams(
 {
     public SvpImportOptions? Svp { get; init; }
     public S5pImportOptions? S5p { get; init; }
+    public UstImportOptions? Ust { get; init; }
 }

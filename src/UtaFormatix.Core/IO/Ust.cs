@@ -11,21 +11,13 @@ namespace UtaFormatix.Core.IO;
 
 public static class Ust
 {
-    private static readonly Encoding ShiftJis;
-
-    static Ust()
-    {
-        Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
-        ShiftJis = Encoding.GetEncoding(932);
-    }
-
     public static Project Parse(string filePath, ImportParams? importParams = null) =>
         Parse([filePath], importParams);
 
     public static Project Parse(string[] filePaths, ImportParams? importParams = null)
     {
         var parameters = importParams ?? new ImportParams();
-        var results = filePaths.Select(ParseFile).ToList();
+        var results = filePaths.Select(path => ParseFile(path, parameters.Ust)).ToList();
 
         var projectName = filePaths.Length == 1
             ? Path.GetFileNameWithoutExtension(filePaths[0])
@@ -89,31 +81,9 @@ public static class Ust
         return tempos;
     }
 
-    private static string ReadFileContent(string filePath)
+    private static FileParseResult ParseFile(string filePath, UstImportOptions? options)
     {
-        var binary = File.ReadAllBytes(filePath);
-        var bytes = binary.AsSpan();
-        if (bytes.StartsWith((ReadOnlySpan<byte>)[0xff, 0xfe]) ||
-            bytes.StartsWith((ReadOnlySpan<byte>)[0xfe, 0xff]) ||
-            bytes.StartsWith((ReadOnlySpan<byte>)[0x00, 0x00, 0xfe, 0xff]))
-            throw new ProjectInputException("UST_ENCODING", $"{filePath}:1 (Encoding)",
-                "UTF-16 and UTF-32 UST files are not supported. Use UTF-8 or Shift-JIS.");
-        if (bytes.StartsWith((ReadOnlySpan<byte>)[0xef, 0xbb, 0xbf])) bytes = bytes[3..];
-        try
-        {
-            var utf8Strict = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
-            var text = utf8Strict.GetString(bytes);
-            return text;
-        }
-        catch (DecoderFallbackException)
-        {
-            return ShiftJis.GetString(bytes);
-        }
-    }
-
-    private static FileParseResult ParseFile(string filePath)
-    {
-        var lines = ReadFileContent(filePath)
+        var lines = UstEncoding.ReadFile(filePath, options)
             .Split(["\r\n", "\n", "\r"], StringSplitOptions.None);
         var lengths = UstInput.Validate(lines, filePath);
 
@@ -348,8 +318,13 @@ public static class Ust
 
     public static (byte[] Data, string FileName, List<ExportNotification> Notifications) Generate(
         Project project, IEnumerable<FeatureConfig>? features = null)
+        => Generate(project, features, null);
+
+    public static (byte[] Data, string FileName, List<ExportNotification> Notifications) Generate(
+        Project project, IEnumerable<FeatureConfig>? features, UstExportOptions? options)
     {
         UstInput.ValidateForExport(project);
+        var encoding = UstEncoding.ForExport(options);
         var featureList = features?.ToList() ?? [];
         var notifications = new List<ExportNotification>();
 
@@ -362,10 +337,11 @@ public static class Ust
         using var zipStream = new MemoryStream();
         using (var archive = new ZipArchive(zipStream, ZipArchiveMode.Create, leaveOpen: true))
         {
-            foreach (var track in project.Tracks)
+            for (var trackIndex = 0; trackIndex < project.Tracks.Count; trackIndex++)
             {
+                var track = project.Tracks[trackIndex];
                 var content = GenerateTrackContent(project, track, featureList);
-                var contentBytes = ShiftJis.GetBytes(content);
+                var contentBytes = UstEncoding.Encode(content, encoding, trackIndex);
                 var trackNameSafe = GetSafeFileName(track.Name);
                 var entryName = $"{project.Name}_{track.Id + 1}_{trackNameSafe}.{Format.Ust.Extension}";
                 var entry = archive.CreateEntry(entryName);
@@ -378,8 +354,11 @@ public static class Ust
     }
 
     public static void GenerateFile(Project project, string filePath, IEnumerable<FeatureConfig>? features = null)
+        => GenerateFile(project, filePath, features, null);
+
+    public static void GenerateFile(Project project, string filePath, IEnumerable<FeatureConfig>? features, UstExportOptions? options)
     {
-        var (data, _, _) = Generate(project, features);
+        var (data, _, _) = Generate(project, features, options);
         File.WriteAllBytes(filePath, data);
     }
 
