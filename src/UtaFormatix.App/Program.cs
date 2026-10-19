@@ -265,8 +265,15 @@ rootCommand.SetAction(async (parseResult) =>
         features.Add(new FeatureConfig.SplitProjectConfig(maxTracks));
     }
 
+    var outputFileName = outputFormat.Name switch
+    {
+        nameof(Format.Ust) or nameof(Format.MusicXml) => $"{project.Name}.zip",
+        nameof(Format.Svp) when splitProject is { } limit && project.Tracks.Count > limit =>
+            $"{outputFormat.GetFileName(project.Name)}.zip",
+        _ => outputFormat.GetFileName(project.Name),
+    };
     var outputPath = output?.FullName
-        ?? Path.Combine(input.DirectoryName ?? ".", outputFormat.GetFileName(project.Name));
+        ?? Path.Combine(input.DirectoryName ?? ".", outputFileName);
 
     Console.WriteLine($"Output: {Path.GetFileName(outputPath)} ({outputFormat.DisplayName})");
 
