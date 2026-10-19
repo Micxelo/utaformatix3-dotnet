@@ -207,7 +207,7 @@ public static class Ust
                 if (double.TryParse(lengthVal, System.Globalization.NumberStyles.Float,
                     System.Globalization.CultureInfo.InvariantCulture, out var lengthD))
                 {
-                    var length = (long)Math.Round(lengthD);
+                    var length = PitchTickRounding.Round(lengthD);
                     pendingNoteTickOn = time;
                     if (pendingBpm is not null)
                     {
