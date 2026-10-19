@@ -218,9 +218,23 @@ rootCommand.SetAction(async (parseResult) =>
                 $"First tempo event occurs at source tick {tempo.FirstEventTick}; inserted default tempo 120 BPM at tick 0.",
             ImportWarning.DefaultTimeSignatureInserted signature =>
                 $"First time signature event occurs at source tick {signature.FirstEventTick}; inserted default time signature 4/4 at tick 0.",
-            _ => null,
+            ImportWarning.DefaultTempoFixed tempo =>
+                $"Initial tempo {tempo.OriginalBpm} BPM exceeds the accepted limit; used default tempo 120 BPM at tick 0.",
+            ImportWarning.TempoIgnoredInFile tempo =>
+                $"Ignored tempo {tempo.TempoValue.Bpm} BPM at tick {tempo.TempoValue.TickPosition} in file \"{tempo.FilePath}\".",
+            ImportWarning.TempoIgnoredInTrack tempo =>
+                $"Ignored tempo {tempo.TempoValue.Bpm} BPM at tick {tempo.TempoValue.TickPosition} in track {tempo.TrackIndex + 1}.",
+            ImportWarning.TempoIgnoredInPreMeasure tempo =>
+                $"Ignored pre-measure tempo {tempo.TempoValue.Bpm} BPM at tick {tempo.TempoValue.TickPosition}.",
+            ImportWarning.TimeSignatureIgnoredInTrack signature =>
+                $"Ignored time signature {signature.TimeSignatureValue.Numerator}/{signature.TimeSignatureValue.Denominator} at measure {signature.TimeSignatureValue.MeasurePosition} in track {signature.TrackIndex + 1}.",
+            ImportWarning.TimeSignatureIgnoredInPreMeasure signature =>
+                $"Ignored pre-measure time signature {signature.TimeSignatureValue.Numerator}/{signature.TimeSignatureValue.Denominator} at measure {signature.TimeSignatureValue.MeasurePosition}.",
+            ImportWarning.IncompatibleFormatSerializationVersion version =>
+                $"Input serialization version {version.DataVersion} is newer than supported version {version.CurrentVersion}; some data may not be imported.",
+            _ => warning.ToString(),
         };
-        if (message is not null) Console.Error.WriteLine($"Warning: {message}");
+        Console.Error.WriteLine($"Warning: {message}");
     }
 
     Console.WriteLine($"  Tracks: {project.Tracks.Count}, Notes: {project.Tracks.Sum(t => t.Notes.Count)}, Tempos: {project.Tempos.Count}");

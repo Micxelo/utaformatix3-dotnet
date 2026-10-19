@@ -46,9 +46,7 @@ public static class Ust
         }
 
         var warnings = new List<ImportWarning>();
-        var temposResult = ResolveTempos(results, warnings);
-        var tempos = temposResult.Tempos;
-        warnings.AddRange(temposResult.Warnings);
+        var tempos = ResolveTempos(results, warnings);
 
         return new Project(
             Format: Format.Ust,
@@ -60,14 +58,14 @@ public static class Ust
             ImportWarnings: warnings);
     }
 
-    private static (List<Tempo> Tempos, List<ImportWarning> Warnings) ResolveTempos(
+    private static List<Tempo> ResolveTempos(
         List<FileParseResult> results, List<ImportWarning> warnings)
     {
         var firstWithTempos = results.FirstOrDefault(r => r.Tempos.Count > 0);
         if (firstWithTempos is null)
         {
             warnings.Add(new ImportWarning.TempoNotFound());
-            return ([new Tempo(0, Constants.DefaultBpm)], warnings);
+            return [new Tempo(0, Constants.DefaultBpm)];
         }
 
         var tempos = firstWithTempos.Tempos.ToList();
@@ -87,7 +85,7 @@ public static class Ust
             }
         }
 
-        return (tempos, warnings);
+        return tempos;
     }
 
     private static string ReadFileContent(string filePath)
