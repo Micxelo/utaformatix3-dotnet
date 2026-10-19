@@ -1,5 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
 using System.IO.Compression;
+using System.Numerics;
 using System.Text;
 using UtaFormatix.Core.Models;
 using UtaFormatix.Core.Process;
@@ -391,7 +392,7 @@ public static class Ust
         AppendLine("[#VERSION]");
         AppendLine("UST Version1.2");
         AppendLine("[#SETTING]");
-        var bpm = project.Tempos[0].Bpm.ToString("F2", System.Globalization.CultureInfo.InvariantCulture);
+        var bpm = FormatTempo(project.Tempos[0].Bpm);
         AppendLine($"Tempo={bpm}");
         AppendLine("Tracks=1");
         AppendLine($"ProjectName={track.Name}");
@@ -439,7 +440,7 @@ public static class Ust
                     AppendLine("PreUtterance=");
                     restCount++;
                     restOn = nextTempo.TickPosition;
-                    noteBpm = nextTempo.Bpm.ToString("F2", System.Globalization.CultureInfo.InvariantCulture);
+                    noteBpm = FormatTempo(nextTempo.Bpm);
                     IncreaseNextTempoIndex();
                 }
 
@@ -458,7 +459,7 @@ public static class Ust
             string? noteBpm2 = null;
             if (nextTempo2 is not null && nextTempo2.TickPosition >= note.TickOn && nextTempo2.TickPosition < note.TickOff)
             {
-                noteBpm2 = nextTempo2.Bpm.ToString("F2", System.Globalization.CultureInfo.InvariantCulture);
+                noteBpm2 = FormatTempo(nextTempo2.Bpm);
                 IncreaseNextTempoIndex();
             }
 
@@ -511,6 +512,37 @@ public static class Ust
     {
         if (notePitch?.PitchPoints is null) return null;
         return string.Join(",", notePitch.PitchPoints.Select(p => ((int)p).ToString()));
+    }
+
+    private static string FormatTempo(double bpm)
+    {
+        var culture = System.Globalization.CultureInfo.InvariantCulture;
+        if (!double.IsFinite(bpm) || Math.Abs(bpm) >= 1e21)
+            return bpm.ToString("G", culture).Replace('E', 'e');
+        if (bpm == 0) return "0.00";
+
+        // Match Number.toFixed(2) using the exact binary value. Scaling a double
+        // by 100 first can erase which side of a midpoint the value lies on.
+        var bits = BitConverter.DoubleToUInt64Bits(Math.Abs(bpm));
+        var exponent = (int)((bits >> 52) & 0x7ff);
+        var significand = bits & 0x000f_ffff_ffff_ffff;
+        if (exponent != 0) significand |= 1UL << 52;
+        var shift = exponent == 0 ? -1074 : exponent - 1075;
+        var cents = new BigInteger(significand) * 100;
+        if (shift >= 0)
+        {
+            cents <<= shift;
+        }
+        else
+        {
+            var divisor = BigInteger.One << -shift;
+            cents = BigInteger.DivRem(cents, divisor, out var remainder);
+            if (remainder * 2 >= divisor) cents += BigInteger.One;
+        }
+
+        var digits = cents.ToString(culture);
+        var text = digits.Length <= 2 ? "0." + digits.PadLeft(2, '0') : digits.Insert(digits.Length - 2, ".");
+        return bpm < 0 ? "-" + text : text;
     }
 
     private static string FormatDouble(double? value) =>
