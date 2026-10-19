@@ -107,9 +107,8 @@ public static class Ust
     private static FileParseResult ParseFile(string filePath)
     {
         var lines = ReadFileContent(filePath)
-            .Split(["\r\n", "\n", "\r"], StringSplitOptions.None)
-            .Where(l => !string.IsNullOrWhiteSpace(l))
-            .ToList();
+            .Split(["\r\n", "\n", "\r"], StringSplitOptions.None);
+        var lengths = UstInput.Validate(lines, filePath);
 
         string? projectName = null;
         var notes = new List<Note>();
@@ -134,8 +133,10 @@ public static class Ust
         double GetCurrentTempo() =>
             tempos.Count > 0 ? tempos.MaxBy(kv => kv.Key).Value : Constants.DefaultBpm;
 
-        foreach (var line in lines)
+        for (var lineNumber = 0; lineNumber < lines.Length; lineNumber++)
         {
+            var line = lines[lineNumber];
+            if (string.IsNullOrWhiteSpace(line)) continue;
             TryGetValue(line, "ProjectName", out var projectNameVal);
             if (projectNameVal is not null) projectName = projectNameVal;
 
@@ -201,21 +202,16 @@ public static class Ust
                 pendingPitchBend = null;
             }
 
-            if (TryGetValue(line, "Length", out var lengthVal))
+            if (lengths.TryGetValue(lineNumber, out var length))
             {
-                if (double.TryParse(lengthVal, System.Globalization.NumberStyles.Float,
-                    System.Globalization.CultureInfo.InvariantCulture, out var lengthD))
+                pendingNoteTickOn = time;
+                if (pendingBpm is not null)
                 {
-                    var length = PitchTickRounding.Round(lengthD);
-                    pendingNoteTickOn = time;
-                    if (pendingBpm is not null)
-                    {
-                        tempos[time] = pendingBpm.Value;
-                        pendingBpm = null;
-                    }
-                    time += length;
-                    pendingNoteTickOff = time;
+                    tempos[time] = pendingBpm.Value;
+                    pendingBpm = null;
                 }
+                time = checked(time + length);
+                pendingNoteTickOff = time;
             }
 
             if (TryGetValue(line, "Lyric", out var lyricVal))
@@ -346,6 +342,7 @@ public static class Ust
     public static (byte[] Data, string FileName, List<ExportNotification> Notifications) Generate(
         Project project, IEnumerable<FeatureConfig>? features = null)
     {
+        UstInput.ValidateForExport(project);
         var featureList = features?.ToList() ?? [];
         var notifications = new List<ExportNotification>();
 
@@ -432,13 +429,16 @@ public static class Ust
 
                 if (nextTempo is not null && nextTempo.TickPosition >= restOn && nextTempo.TickPosition < note.TickOn)
                 {
-                    var restNoteNumber = (note.Id + restCount).ToString().PadLeft(4, '0');
-                    AppendLine($"[#{restNoteNumber}]");
-                    AppendLine($"Length={nextTempo.TickPosition - restOn}");
-                    AppendLine("Lyric=R");
-                    AppendLine("NoteNum=60");
-                    AppendLine("PreUtterance=");
-                    restCount++;
+                    if (nextTempo.TickPosition > restOn)
+                    {
+                        var restNoteNumber = (note.Id + restCount).ToString().PadLeft(4, '0');
+                        AppendLine($"[#{restNoteNumber}]");
+                        AppendLine($"Length={nextTempo.TickPosition - restOn}");
+                        AppendLine("Lyric=R");
+                        AppendLine("NoteNum=60");
+                        AppendLine("PreUtterance=");
+                        restCount++;
+                    }
                     restOn = nextTempo.TickPosition;
                     noteBpm = FormatTempo(nextTempo.Bpm);
                     IncreaseNextTempoIndex();
@@ -511,6 +511,8 @@ public static class Ust
     private static string? MakeMode1PitchDataString(UtauMode1NotePitchData? notePitch)
     {
         if (notePitch?.PitchPoints is null) return null;
+        if (notePitch.PitchPoints.Any(p => !double.IsFinite(p)))
+            throw new ProjectInputException("UST_NUMBER", "$.export.pitch", "Converted pitch must be finite.");
         return string.Join(",", notePitch.PitchPoints.Select(p => ((int)p).ToString()));
     }
 
@@ -545,8 +547,12 @@ public static class Ust
         return bpm < 0 ? "-" + text : text;
     }
 
-    private static string FormatDouble(double? value) =>
-        value is null ? "" : value.Value.ToString("G", System.Globalization.CultureInfo.InvariantCulture);
+    private static string FormatDouble(double? value)
+    {
+        if (value is { } number && !double.IsFinite(number))
+            throw new ProjectInputException("UST_NUMBER", "$.export.pitch", "Converted pitch must be finite.");
+        return value is null ? "" : value.Value.ToString("G", System.Globalization.CultureInfo.InvariantCulture);
+    }
 
     private static string GetSafeFileName(string name)
     {
