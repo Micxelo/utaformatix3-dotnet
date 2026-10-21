@@ -1,5 +1,6 @@
 using System.Globalization;
 using UtaFormatix.Core.Models;
+using UtaFormatix.Core.Process;
 using UtaFormatix.Core.Process.Pitch;
 
 namespace UtaFormatix.Core.IO;
@@ -8,6 +9,8 @@ internal static class UstInput
 {
     private static readonly string[] NumericFields =
         ["Length", "Tempo", "NoteNum", "PBS", "PBW", "PBY", "VBR", "Piches", "Pitches", "PitchBend"];
+    private static readonly string[] NoteFields =
+        ["Length", "Lyric", "NoteNum", "PBS", "PBW", "PBY", "PBM", "VBR", "Piches", "Pitches", "PitchBend"];
 
     public static Dictionary<int, long> Validate(string[] lines, string filePath)
     {
@@ -29,13 +32,19 @@ internal static class UstInput
         {
             var line = lines[lineNumber];
             var section = lineNumber == 0 ? line.TrimStart('\ufeff') : line;
-            if (section.StartsWith("[#", StringComparison.Ordinal) && section.EndsWith(']'))
+            if (section.TrimStart().StartsWith("[#", StringComparison.Ordinal) && !IsSection(section))
+                throw new ProjectInputException("UST_SECTION", At(lineNumber, "section"),
+                    "Expected a complete section header occupying the whole line: [#...].");
+            if (IsSection(section))
             {
                 FinishSection();
                 noteSection = IsNoteSection(section) ? section : null;
                 sectionLine = lineNumber;
                 hasLength = false;
             }
+            if (noteSection is null && NoteFields.Any(field => line.StartsWith(field + "=", StringComparison.Ordinal)))
+                throw new ProjectInputException("UST_SECTION", At(lineNumber, "section"),
+                    "Note and pitch fields require a numeric note or rest section.");
 
             foreach (var field in NumericFields)
             {
@@ -49,6 +58,9 @@ internal static class UstInput
                     RejectNonFinite(cells[i], cells.Length > 1 ? path + $"[{i}]" : path);
 
                 if (field != "Length") continue;
+                if (hasLength)
+                    throw new ProjectInputException("UST_LENGTH", path,
+                        "A note or rest section cannot contain multiple Length fields; the timeline is ambiguous.");
                 if (!long.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var ticks))
                 {
                     if (!double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var number) || number <= 0)
@@ -72,9 +84,12 @@ internal static class UstInput
         return lengths;
     }
 
+    public static bool IsSection(string line) =>
+        line.StartsWith("[#", StringComparison.Ordinal) && line.EndsWith(']');
+
     public static bool IsNoteSection(string section)
     {
-        if (!section.StartsWith("[#", StringComparison.Ordinal) || !section.EndsWith(']')) return false;
+        if (!IsSection(section)) return false;
         var index = section.AsSpan(2, section.Length - 3);
         if (index.Length > 0 && (index[0] == '+' || index[0] == '-')) index = index[1..];
         return index.Length > 0 && !index.ContainsAnyExceptInRange('0', '9');
@@ -102,11 +117,16 @@ internal static class UstInput
         for (var ti = 0; ti < project.Tracks.Count; ti++)
         {
             var track = project.Tracks[ti];
+            ValidateText(track.Name, $"$.tracks[{ti}].name");
             var writtenTicks = 0L;
             var previousEnd = 0L;
             for (var ni = 0; ni < track.Notes.Count; ni++)
             {
                 var note = track.Notes[ni];
+                ValidateText(note.Lyric, $"$.tracks[{ti}].notes[{ni}].lyric");
+                if (LyricWhitespace.IsNullOrBlank(note.Lyric) || note.Lyric is "R" or "r")
+                    throw new ProjectInputException("UST_LYRIC", $"$.tracks[{ti}].notes[{ni}].lyric",
+                        "A sung note requires a non-blank lyric other than the UST rest markers R/r; this lyric would lose the note.");
                 if (note.TickOn < 0 || note.TickOff <= note.TickOn)
                     throw new ProjectInputException("UST_LENGTH", $"$.tracks[{ti}].notes[{ni}]",
                         "Notes must have a non-negative start and a positive duration on the Int64 tick axis.");
@@ -127,5 +147,12 @@ internal static class UstInput
                     if (track.Pitch.Data[pi].Value is { } value && !double.IsFinite(value))
                         throw new ProjectInputException("UST_NUMBER", $"$.tracks[{ti}].pitch[{pi}]", "Pitch must be finite or null.");
         }
+    }
+
+    private static void ValidateText(string text, string path)
+    {
+        if (text.AsSpan().IndexOfAny('\r', '\n') >= 0)
+            throw new ProjectInputException("UST_TEXT", path,
+                "UST text fields cannot contain CR or LF line breaks; they would create extra fields or sections.");
     }
 }

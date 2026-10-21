@@ -112,13 +112,19 @@ public static class Ust
         var pendingSectionLine = 0;
         int? pendingLyricLine = null;
         int? pendingKeyLine = null;
-        List<int>? pendingInvalidKeyLines = null;
+        int? pendingShiftLine = null;
+        int? pendingCurveLine = null;
+        var pendingShiftCount = 0;
+        var pendingCurveCount = 0;
         var pendingRest = false;
         var unterminatedSection = false;
         var lastSectionLine = 0;
 
         void Warn(string code, int lineNumber, string field, string message) =>
             warnings.Add(new ImportWarning.InputDiagnostic(code, $"{filePath}:{lineNumber + 1} ({field})", message));
+
+        ProjectInputException Fail(string code, int lineNumber, string field, string message) =>
+            new(code, $"{filePath}:{lineNumber + 1} ({field})", message);
 
         double GetCurrentTempo() =>
             tempos.Count > 0 ? tempos.MaxBy(kv => kv.Key).Value : Constants.DefaultBpm;
@@ -128,6 +134,22 @@ public static class Ust
             if (pendingNoteKey is not null && pendingNoteLyric is not null &&
                 pendingNoteTickOn is not null && pendingNoteTickOff is not null)
             {
+                if (isMode2)
+                {
+                    if (pendingPBS is null && pendingPBY?.Any(v => v != 0.0) == true)
+                        throw Fail("UST_PITCH", pendingShiftLine ?? pendingSectionLine, "PBY",
+                            "Non-zero pitch shifts require a valid PBS start; the curve cannot be recovered without losing data.");
+                    if (pendingPBS is not null)
+                    {
+                        var widthCount = pendingPBW?.Count ?? 0;
+                        if (pendingShiftCount > widthCount)
+                            throw Fail("UST_PITCH", pendingShiftLine ?? pendingSectionLine, $"PBY[{widthCount}]",
+                                "Pitch shifts exceed the number of PBW intervals; extra shifts cannot be assigned a time.");
+                        if (pendingCurveCount > widthCount)
+                            throw Fail("UST_PITCH", pendingCurveLine ?? pendingSectionLine, $"PBM[{widthCount}]",
+                                "Pitch curve types exceed the number of PBW intervals.");
+                    }
+                }
                 notes.Add(new Note(notes.Count, pendingNoteKey.Value, pendingNoteLyric,
                     pendingNoteTickOn.Value, pendingNoteTickOff.Value));
                 notePitchDataListMode2.Add(new UtauMode2NotePitchData(GetCurrentTempo(),
@@ -143,43 +165,35 @@ public static class Ust
                 if (pendingNoteTickOn is null || pendingNoteTickOff is null) missing.Add("Length is missing");
                 var line = pendingNoteLyric is null ? pendingLyricLine : pendingKeyLine;
                 var field = pendingNoteLyric is null ? "Lyric" : pendingNoteKey is null ? "NoteNum" : "Length";
-                Warn("UST_NOTE_SKIPPED", line ?? pendingSectionLine, $"{pendingSection}.{field}",
-                    $"Skipped note: {string.Join("; ", missing)}.");
+                throw Fail("UST_REQUIRED", line ?? pendingSectionLine, $"{pendingSection}.{field}",
+                    $"Cannot recover note: {string.Join("; ", missing)}.");
             }
-            if ((pendingNoteKey is not null || pendingRest) && pendingInvalidKeyLines is not null)
-                foreach (var line in pendingInvalidKeyLines)
-                    Warn("UST_INVALID_VALUE", line, "NoteNum", "Ignored invalid NoteNum; used the valid value in this section or kept the rest.");
         }
 
-        List<double> ParsePitchNumbers(string text, string field, int lineNumber, bool discardInvalid = false)
+        List<double> ParsePitchNumbers(string text, string field, int lineNumber, out int specifiedCount, bool allowEmpty = true)
         {
             var cells = text.Split(',');
             var values = new List<double>(cells.Length);
-            var invalidCount = 0;
-            var firstInvalid = 0;
+            specifiedCount = 0;
             for (var i = 0; i < cells.Length; i++)
             {
                 if (double.TryParse(cells[i], System.Globalization.NumberStyles.Float,
                     System.Globalization.CultureInfo.InvariantCulture, out var value))
                 {
+                    if (field == "PBW" && value < 0)
+                        throw Fail("UST_PITCH", lineNumber, $"{field}[{i}]", "Pitch interval widths cannot be negative.");
                     values.Add(value);
+                    specifiedCount = i + 1;
+                }
+                else if (allowEmpty && string.IsNullOrWhiteSpace(cells[i]))
+                {
+                    // Preserve the existing zero shorthand and trailing placeholders.
+                    values.Add(0.0);
                 }
                 else
-                {
-                    if (!discardInvalid) values.Add(0.0);
-                    // Preserve the zero shorthand for empty Mode 1/2 cells. Vibrato
-                    // cells are removed by the existing parser, shifting values.
-                    if (discardInvalid || !string.IsNullOrWhiteSpace(cells[i]))
-                    {
-                        if (invalidCount == 0) firstInvalid = i;
-                        invalidCount++;
-                    }
-                }
+                    throw Fail("UST_INVALID_VALUE", lineNumber, $"{field}[{i}]",
+                        "Expected a numeric pitch value; replacing or removing this cell would change the curve.");
             }
-            if (invalidCount > 0)
-                Warn("UST_INVALID_VALUE", lineNumber, $"{field}[{firstInvalid}]",
-                    discardInvalid ? $"Ignored {invalidCount} invalid numeric cell(s) in {field}; later values shift left."
-                        : $"Replaced {invalidCount} invalid numeric cell(s) in {field} with zero.");
             return values;
         }
 
@@ -210,13 +224,20 @@ public static class Ust
                     }
                 }
                 else
-                    Warn("UST_INVALID_VALUE", lineNumber, "Tempo", "Ignored invalid Tempo; kept the previous or default tempo.");
+                    throw Fail("UST_INVALID_VALUE", lineNumber, "Tempo", "Expected a numeric Tempo; the intended speed cannot be recovered.");
             }
 
-            if (line.Contains("Mode2=True")) isMode2 = true;
-            if (line.Contains("[#0000]")) isHeader = false;
+            if (TryGetValue(line, "Mode2", out var modeVal))
+            {
+                if (!isHeader)
+                    throw Fail("UST_SECTION", lineNumber, "Mode2", "Mode2 belongs to the project settings before note sections.");
+                if (!bool.TryParse(modeVal, out isMode2))
+                    throw Fail("UST_INVALID_VALUE", lineNumber, "Mode2", "Mode2 must be True or False.");
+                if (modeVal != (isMode2 ? "True" : "False"))
+                    Warn("UST_NORMALIZED", lineNumber, "Mode2", "Normalized the boolean setting without changing its meaning.");
+            }
 
-            if (line.Contains("[#"))
+            if (UstInput.IsSection(line))
             {
                 FinishNote();
 
@@ -234,10 +255,14 @@ public static class Ust
                 pendingSectionLine = lineNumber;
                 pendingLyricLine = null;
                 pendingKeyLine = null;
-                pendingInvalidKeyLines = null;
+                pendingShiftLine = null;
+                pendingCurveLine = null;
+                pendingShiftCount = 0;
+                pendingCurveCount = 0;
                 pendingRest = false;
                 if (pendingSection is not null)
                 {
+                    isHeader = false;
                     unterminatedSection = true;
                     lastSectionLine = lineNumber;
                 }
@@ -256,21 +281,29 @@ public static class Ust
                 pendingNoteTickOff = time;
             }
 
-            if (line.StartsWith("Lyric=", StringComparison.Ordinal)) pendingLyricLine = lineNumber;
+            if (line.StartsWith("Lyric=", StringComparison.Ordinal))
+            {
+                pendingLyricLine = lineNumber;
+                pendingNoteLyric = null;
+                pendingRest = false;
+            }
             if (TryGetValue(line, "Lyric", out var lyricVal))
             {
                 pendingRest = lyricVal is "R" or "r";
-                if (lyricVal != "R" && lyricVal != "r")
-                    pendingNoteLyric = lyricVal;
+                pendingNoteLyric = pendingRest ? null : lyricVal;
             }
 
-            if (line.StartsWith("NoteNum=", StringComparison.Ordinal)) pendingKeyLine = lineNumber;
+            if (line.StartsWith("NoteNum=", StringComparison.Ordinal))
+            {
+                pendingKeyLine = lineNumber;
+                pendingNoteKey = null;
+            }
             if (TryGetValue(line, "NoteNum", out var noteNumVal))
             {
                 if (int.TryParse(noteNumVal, out var key))
                     pendingNoteKey = key;
                 else
-                    (pendingInvalidKeyLines ??= []).Add(lineNumber);
+                    throw Fail("UST_INVALID_VALUE", lineNumber, "NoteNum", "NoteNum must be an Int32 integer; the intended key cannot be recovered.");
             }
 
             if (isMode2)
@@ -287,46 +320,50 @@ public static class Ust
                             : null;
                         pendingPBS = (start, startShift);
                         if (cells.Length > 1 && !string.IsNullOrWhiteSpace(cells[1]) && startShift is null)
-                            Warn("UST_INVALID_VALUE", lineNumber, "PBS[1]", "Ignored invalid PBS start shift; used the default shift.");
+                            throw Fail("UST_INVALID_VALUE", lineNumber, "PBS[1]", "Expected a numeric PBS start shift.");
                     }
                     else
-                        Warn("UST_INVALID_VALUE", lineNumber, "PBS[0]", "Ignored invalid PBS start; kept the previous curve start if present.");
+                        throw Fail("UST_INVALID_VALUE", lineNumber, "PBS[0]", "Expected a numeric PBS start.");
                     if (cells.Skip(2).Any(c => !string.IsNullOrWhiteSpace(c)))
-                        Warn("UST_PITCH_IGNORED", lineNumber, "PBS[2]", "Ignored PBS cells after the start and optional start shift.");
+                        throw Fail("UST_PITCH", lineNumber, "PBS[2]", "PBS supports only a start and optional start shift; extra values cannot be recovered.");
                 }
 
                 if (TryGetValue(line, "PBW", out var pbwVal))
-                    pendingPBW = ParsePitchNumbers(pbwVal, "PBW", lineNumber);
+                    pendingPBW = ParsePitchNumbers(pbwVal, "PBW", lineNumber, out _);
 
                 if (TryGetValue(line, "PBY", out var pbyVal))
-                    pendingPBY = ParsePitchNumbers(pbyVal, "PBY", lineNumber);
+                {
+                    pendingPBY = ParsePitchNumbers(pbyVal, "PBY", lineNumber, out pendingShiftCount);
+                    pendingShiftLine = lineNumber;
+                }
 
                 if (TryGetValue(line, "PBM", out var pbmVal))
                 {
                     pendingPBM = pbmVal.Split(',').ToList();
                     var invalidCurve = pendingPBM.FindIndex(c => c is not ("" or "s" or "j" or "r"));
                     if (invalidCurve >= 0)
-                        Warn("UST_INVALID_VALUE", lineNumber, $"PBM[{invalidCurve}]",
-                            "Unknown pitch curve type; used the default cosine ease-in-out interpolation for unsupported curves.");
+                        throw Fail("UST_PITCH", lineNumber, $"PBM[{invalidCurve}]", "Unknown pitch curve type; interpolation cannot be recovered.");
+                    pendingCurveLine = lineNumber;
+                    pendingCurveCount = pendingPBM.FindLastIndex(c => c != "") + 1;
                 }
 
                 if (TryGetValue(line, "VBR", out var vbrVal))
                 {
-                    pendingVBR = ParsePitchNumbers(vbrVal, "VBR", lineNumber, discardInvalid: true);
+                    pendingVBR = ParsePitchNumbers(vbrVal, "VBR", lineNumber, out _, allowEmpty: false);
                     if (pendingVBR.Count < 2)
-                        Warn("UST_PITCH_IGNORED", lineNumber, "VBR", "Ignored vibrato data with fewer than two numeric parameters.");
+                        throw Fail("UST_PITCH", lineNumber, "VBR", "Vibrato data requires at least two numeric parameters.");
                     else if (pendingVBR.Count > 7)
-                        Warn("UST_PITCH_IGNORED", lineNumber, "VBR[7]", "Ignored vibrato parameters after the seventh value.");
+                        throw Fail("UST_PITCH", lineNumber, "VBR[7]", "Vibrato data supports at most seven parameters.");
                 }
             }
             else
             {
                 if (TryGetValue(line, "Piches", out var pichesVal) && pendingPitchBend is null)
-                    pendingPitchBend = ParsePitchNumbers(pichesVal, "Piches", lineNumber);
+                    pendingPitchBend = ParsePitchNumbers(pichesVal, "Piches", lineNumber, out _);
                 else if (TryGetValue(line, "Pitches", out var pitchesVal) && pendingPitchBend is null)
-                    pendingPitchBend = ParsePitchNumbers(pitchesVal, "Pitches", lineNumber);
+                    pendingPitchBend = ParsePitchNumbers(pitchesVal, "Pitches", lineNumber, out _);
                 else if (TryGetValue(line, "PitchBend", out var pitchBendVal) && pendingPitchBend is null)
-                    pendingPitchBend = ParsePitchNumbers(pitchBendVal, "PitchBend", lineNumber);
+                    pendingPitchBend = ParsePitchNumbers(pitchBendVal, "PitchBend", lineNumber, out _);
             }
         }
 
