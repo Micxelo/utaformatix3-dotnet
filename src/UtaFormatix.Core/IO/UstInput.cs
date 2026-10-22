@@ -57,6 +57,13 @@ internal static class UstInput
                 for (var i = 0; i < cells.Length; i++)
                     RejectNonFinite(cells[i], cells.Length > 1 ? path + $"[{i}]" : path);
 
+                if (field == "Tempo" && !string.IsNullOrWhiteSpace(value))
+                {
+                    if (!double.TryParse(value.Replace(',', '.'), NumberStyles.Float, CultureInfo.InvariantCulture, out var bpm))
+                        throw new ProjectInputException("UST_INVALID_VALUE", path,
+                            "Expected a numeric Tempo; the intended speed cannot be recovered.");
+                    ValidateTempo(bpm, path);
+                }
                 if (field != "Length") continue;
                 if (hasLength)
                     throw new ProjectInputException("UST_LENGTH", path,
@@ -107,13 +114,55 @@ internal static class UstInput
             throw new ProjectInputException("UST_NUMBER", path, "Expected a finite number; NaN, infinity and numeric overflow are not supported.");
     }
 
+    private static void ValidateTempo(double bpm, string path)
+    {
+        if (!double.IsFinite(bpm))
+            throw new ProjectInputException("UST_NUMBER", path, "Tempo must be finite.");
+        var secondsPerTick = bpm.BpmToSecPerTick();
+        var millisecondsPerTick = 60000.0 / (bpm * Constants.TicksInBeat);
+        if (bpm <= 0 || !double.IsFinite(secondsPerTick) || secondsPerTick <= 0
+            || !double.IsFinite(secondsPerTick * 1000.0)
+            || !double.IsFinite(millisecondsPerTick) || millisecondsPerTick <= 0)
+            throw new ProjectInputException("UST_RANGE", path,
+                "BPM must be positive and representable in the seconds and milliseconds time mapping.");
+    }
+
+    public static void ValidateTempoTimeMapping(List<Tempo> tempos, long endTick, Func<int, string> pathForTempo)
+    {
+        if (tempos.Count == 0) return;
+        void CheckTime(double seconds, int index)
+        {
+            if (!double.IsFinite(seconds * 1000.0))
+                throw new ProjectInputException("UST_RANGE", pathForTempo(index),
+                    "BPM produces a non-finite time on this project's tick axis.");
+        }
+
+        CheckTime(-(double)tempos[0].TickPosition * tempos[0].Bpm.BpmToSecPerTick(), 0);
+        var offset = 0.0;
+        for (var i = 1; i < tempos.Count; i++)
+        {
+            offset += (double)((decimal)tempos[i].TickPosition - tempos[i - 1].TickPosition)
+                * tempos[i - 1].Bpm.BpmToSecPerTick();
+            CheckTime(offset, i - 1);
+        }
+        var last = tempos[^1];
+        CheckTime(offset + (double)((decimal)Math.Max(endTick, last.TickPosition) - last.TickPosition)
+            * last.Bpm.BpmToSecPerTick(), tempos.Count - 1);
+    }
+
     public static void ValidateForExport(Project project)
     {
         if (project.Tempos.Count == 0)
             throw new ProjectInputException("UST_EXPORT", "$.tempos", "At least one tempo is required.");
         for (var i = 0; i < project.Tempos.Count; i++)
-            if (!double.IsFinite(project.Tempos[i].Bpm))
-                throw new ProjectInputException("UST_NUMBER", $"$.tempos[{i}].bpm", "Tempo must be finite.");
+        {
+            var path = $"$.tempos[{i}].bpm";
+            ValidateTempo(project.Tempos[i].Bpm, path);
+            if (double.Parse(Ust.FormatTempo(project.Tempos[i].Bpm), CultureInfo.InvariantCulture) <= 0)
+                throw new ProjectInputException("UST_RANGE", path,
+                    "BPM rounds to zero in UST's two-decimal tempo representation.");
+        }
+        var endTick = 0L;
         for (var ti = 0; ti < project.Tracks.Count; ti++)
         {
             var track = project.Tracks[ti];
@@ -141,12 +190,14 @@ internal static class UstInput
                         "Exported note and rest lengths exceed the Int64 tick axis.");
                 }
                 previousEnd = note.TickOff;
+                endTick = Math.Max(endTick, note.TickOff);
             }
             if (track.Pitch is not null)
                 for (var pi = 0; pi < track.Pitch.Data.Count; pi++)
                     if (track.Pitch.Data[pi].Value is { } value && !double.IsFinite(value))
                         throw new ProjectInputException("UST_NUMBER", $"$.tracks[{ti}].pitch[{pi}]", "Pitch must be finite or null.");
         }
+        ValidateTempoTimeMapping(project.Tempos, endTick, i => $"$.tempos[{i}].bpm");
     }
 
     private static void ValidateText(string text, string path)

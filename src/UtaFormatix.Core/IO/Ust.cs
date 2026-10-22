@@ -94,6 +94,7 @@ public static class Ust
         var notePitchDataListMode1 = new List<UtauMode1NotePitchData>();
         var notePitchDataListMode2 = new List<UtauMode2NotePitchData>();
         var tempos = new Dictionary<long, double>();
+        var tempoLines = new Dictionary<long, int>();
         var isHeader = true;
         var time = 0L;
         int? pendingNoteKey = null;
@@ -102,6 +103,7 @@ public static class Ust
         long? pendingNoteTickOff = null;
         var isMode2 = false;
         double? pendingBpm = null;
+        var pendingBpmLine = 0;
         List<double>? pendingPitchBend = null;
         (double Start, double? StartShift)? pendingPBS = null;
         List<double>? pendingPBW = null;
@@ -213,14 +215,17 @@ public static class Ust
                     if (isHeader)
                     {
                         tempos[0] = bpm;
+                        tempoLines[0] = lineNumber;
                     }
                     else if (pendingNoteTickOn is not null)
                     {
                         tempos[pendingNoteTickOn.Value] = bpm;
+                        tempoLines[pendingNoteTickOn.Value] = lineNumber;
                     }
                     else
                     {
                         pendingBpm = bpm;
+                        pendingBpmLine = lineNumber;
                     }
                 }
                 else
@@ -275,6 +280,7 @@ public static class Ust
                 if (pendingBpm is not null)
                 {
                     tempos[time] = pendingBpm.Value;
+                    tempoLines[time] = pendingBpmLine;
                     pendingBpm = null;
                 }
                 time = checked(time + length);
@@ -377,6 +383,8 @@ public static class Ust
         var tempoList = tempos.Select(kv => new Tempo(kv.Key, kv.Value))
             .OrderBy(t => t.TickPosition)
             .ToList();
+        UstInput.ValidateTempoTimeMapping(tempoList, time,
+            i => $"{filePath}:{tempoLines[tempoList[i].TickPosition] + 1} (Tempo)");
 
         var pitchDataMode1 = notePitchDataListMode1.Count > 0
             ? new UtauMode1TrackPitchData(notePitchDataListMode1.Cast<UtauMode1NotePitchData?>().ToList())
@@ -625,7 +633,7 @@ public static class Ust
         return string.Join(",", notePitch.PitchPoints.Select(p => ((int)p).ToString()));
     }
 
-    private static string FormatTempo(double bpm)
+    internal static string FormatTempo(double bpm)
     {
         var culture = System.Globalization.CultureInfo.InvariantCulture;
         if (!double.IsFinite(bpm) || Math.Abs(bpm) >= 1e21)
