@@ -511,6 +511,7 @@ public static class Ust
 
         var tickPos = 0L;
         var restCount = 0;
+        string? deferredBpm = null;
         int? nextTempoIndex = 0;
 
         void IncreaseNextTempoIndex()
@@ -539,7 +540,8 @@ public static class Ust
             {
                 var nextTempo = GetNextTempo();
                 var restOn = tickPos;
-                string? noteBpm = null;
+                var noteBpm = deferredBpm;
+                deferredBpm = null;
 
                 while (nextTempo is not null && nextTempo.TickPosition >= restOn && nextTempo.TickPosition < note.TickOn)
                 {
@@ -573,12 +575,24 @@ public static class Ust
             }
 
             var nextTempo2 = GetNextTempo();
-            string? noteBpm2 = null;
-            if (nextTempo2 is not null && nextTempo2.TickPosition >= note.TickOn && nextTempo2.TickPosition < note.TickOff)
+            var firstTempoTick = nextTempo2?.TickPosition;
+            var noteBpm2 = deferredBpm;
+            deferredBpm = null;
+            while (nextTempo2 is not null && nextTempo2.TickPosition >= note.TickOn && nextTempo2.TickPosition < note.TickOff)
             {
-                noteBpm2 = FormatTempo(nextTempo2.Bpm);
+                var nextBpm = FormatTempo(nextTempo2.Bpm);
+                // Keep the first tempo position at the note onset; duplicates
+                // at that position use the last value. Later changes cannot be
+                // placed inside a sung note, so restore their final BPM at the
+                // next section boundary without blocking subsequent markers.
+                if (nextTempo2.TickPosition == firstTempoTick)
+                    noteBpm2 = nextBpm;
+                else
+                    deferredBpm = nextBpm;
                 IncreaseNextTempoIndex();
+                nextTempo2 = GetNextTempo();
             }
+            if (deferredBpm == noteBpm2) deferredBpm = null;
 
             var noteNumber = (note.Id + restCount).ToString().PadLeft(4, '0');
             AppendLine($"[#{noteNumber}]");
