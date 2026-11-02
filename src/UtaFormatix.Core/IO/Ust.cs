@@ -360,6 +360,12 @@ public static class Ust
                         throw Fail("UST_PITCH", lineNumber, "VBR", "Vibrato data requires at least two numeric parameters.");
                     else if (pendingVBR.Count > 7)
                         throw Fail("UST_PITCH", lineNumber, "VBR[7]", "Vibrato data supports at most seven parameters.");
+                    if (pendingVBR[1] == 0.0)
+                    {
+                        Warn("UST_VIBRATO_IGNORED", lineNumber, "VBR[1]",
+                            "Ignored vibrato because its period is zero.");
+                        pendingVBR = null;
+                    }
                 }
             }
             else
