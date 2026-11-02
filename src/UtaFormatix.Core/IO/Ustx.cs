@@ -5,6 +5,7 @@ using YamlDotNet.Serialization;
 using YamlDotNet.Serialization.NamingConventions;
 using YamlDotNet.Serialization.TypeResolvers;
 using UtaFormatix.Core.Models;
+using UtaFormatix.Core.Process;
 using UtaFormatix.Core.Process.Pitch;
 using PitchModel = UtaFormatix.Core.Models.Pitch;
 
@@ -42,7 +43,7 @@ public static class Ustx
             .WithNamingConvention(UnderscoredNamingConvention.Instance)
             .IgnoreUnmatchedProperties()
             .Build();
-        var ustxProject = deserializer.Deserialize<UstxProject>(yamlText);
+        var ustxProject = UstxYamlParser.Deserialize<UstxProject>(deserializer, yamlText);
 
         var tempos = ParseTempos(ustxProject);
         var timeSignatures = ParseTimeSignatures(ustxProject);
@@ -97,7 +98,7 @@ public static class Ustx
             var notes = voicePart.Notes.Select(n =>
             {
                 var rawLyrics = n.Lyric;
-                var match = Regex.Match(rawLyrics, @"\[([^\[\]]*)\]$");
+                var match = Regex.Match(rawLyrics, @"\[([^\[\]]*)\]\z");
                 string lyric;
                 string? phoneme;
                 if (!match.Success)
@@ -108,7 +109,7 @@ public static class Ustx
                 else
                 {
                     var cleanedPhoneme = match.Groups[1].Value;
-                    var beforeBracket = rawLyrics[..match.Index].Trim();
+                    var beforeBracket = LyricWhitespace.Trim(rawLyrics[..match.Index]);
                     lyric = beforeBracket.Length > 0 ? beforeBracket : cleanedPhoneme;
                     phoneme = cleanedPhoneme;
                 }
@@ -329,7 +330,7 @@ public static class Ustx
             i == 0 ? new UstxDatum { X = d.X, Y = firstPitchPointValue, Shape = d.Shape }
                    : new UstxDatum { X = d.X, Y = d.Y, Shape = d.Shape }).ToList();
 
-        var lyric = !string.IsNullOrWhiteSpace(thisNote.Phoneme)
+        var lyric = !LyricWhitespace.IsNullOrBlank(thisNote.Phoneme)
             ? $"{thisNote.Lyric} [{thisNote.Phoneme}]"
             : thisNote.Lyric;
 
