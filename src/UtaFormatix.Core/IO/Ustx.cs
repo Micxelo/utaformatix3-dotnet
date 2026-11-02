@@ -1,5 +1,6 @@
 using System.Reflection;
 using System.Text.RegularExpressions;
+using YamlDotNet.Core;
 using YamlDotNet.Serialization;
 using YamlDotNet.Serialization.NamingConventions;
 using YamlDotNet.Serialization.TypeResolvers;
@@ -271,6 +272,8 @@ public static class Ustx
         };
 
         var serializer = new StaticSerializerBuilder(new UstxYamlContext())
+            // Preserve string types and exact whitespace across YAML readers.
+            .WithDefaultScalarStyle(ScalarStyle.DoubleQuoted)
             .WithNamingConvention(UnderscoredNamingConvention.Instance)
             .ConfigureDefaultValuesHandling(DefaultValuesHandling.Preserve)
             .Build();
