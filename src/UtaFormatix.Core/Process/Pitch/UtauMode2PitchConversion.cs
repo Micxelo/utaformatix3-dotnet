@@ -33,10 +33,10 @@ internal static class UtauMode2PitchConversion
         tempos.Last(t => t.TickPosition <= note.TickOn).Bpm;
 
     public static UtauMode2TrackPitchData? PitchToUtauMode2Track(
-        PitchModel? pitch, List<Note> notes, List<Tempo> tempos)
+        PitchModel? pitch, List<Note> notes, List<Tempo> tempos, UstPitchContext? context = null)
     {
         if (pitch is null) return null;
-        var absolutePitch = pitch.GetAbsoluteData(notes);
+        var absolutePitch = context is null ? pitch.GetAbsoluteData(notes) : context.Absolute(pitch, notes);
         if (absolutePitch is null) return null;
         if (notes.Count == 0) return null;
 
@@ -55,7 +55,7 @@ internal static class UtauMode2PitchConversion
 
         dotPitData.Add((
             ToRelative(absolutePitch.Where(p => p.Tick < firstNote.TickOff).ToList(), firstNote.Key),
-            -minNegTick,
+            context?.Distance(minNegTick, 0, "PBS") ?? -minNegTick,
             BpmForNote(tempos, firstNote)));
 
         for (var i = 1; i < notes.Count; i++)
@@ -63,7 +63,8 @@ internal static class UtauMode2PitchConversion
             var note = notes[i];
             var filtered = absolutePitch.Where(p => p.Tick >= note.TickOn && p.Tick < note.TickOff).ToList();
             var firstAtNote = absolutePitch.FirstOrDefault(p => p.Tick >= note.TickOn);
-            var offset = (firstAtNote.Tick >= note.TickOn ? firstAtNote.Tick : note.TickOn) - note.TickOn;
+            var offsetTick = firstAtNote.Tick >= note.TickOn ? firstAtNote.Tick : note.TickOn;
+            var offset = context?.Distance(note.TickOn, offsetTick, "PBS") ?? offsetTick - note.TickOn;
 
             dotPitData.Add((
                 ToRelative(filtered, note.Key),
@@ -72,13 +73,19 @@ internal static class UtauMode2PitchConversion
         }
 
         var simplified = dotPitData
-            .Select(d => (RdpSimplification.SimplifyShapeTo(d.Pitch, UstConstants.Mode2PitchMaxPointCount), d.Offset, d.Bpm))
+            .Select((d, index) =>
+            {
+                context?.AtNote(index);
+                return (context is null ? RdpSimplification.SimplifyShapeTo(d.Pitch, UstConstants.Mode2PitchMaxPointCount)
+                    : context.Simplify(d.Pitch, UstConstants.Mode2PitchMaxPointCount), d.Offset, d.Bpm);
+            })
             .ToList();
 
         var result = new List<UtauMode2NotePitchData?>();
 
         foreach (var (pit, offset, bpm) in simplified)
         {
+            context?.AtNote(result.Count);
             if (pit.Count == 0)
             {
                 result.Add(null);
@@ -91,11 +98,19 @@ internal static class UtauMode2PitchConversion
 
             for (var j = 0; j < pit.Count - 1; j++)
             {
-                widths.Add(MilliSecFromTick(pit[j + 1].Tick - pit[j].Tick, bpm));
-                shifts.Add(pit[j + 1].Value * 10);
+                var distance = context?.Distance(pit[j].Tick, pit[j + 1].Tick, "PBW") ?? pit[j + 1].Tick - pit[j].Tick;
+                var width = MilliSecFromTick(distance, bpm);
+                var shift = pit[j + 1].Value * 10;
+                context?.Finite(width, "PBW");
+                if (context is not null && width < 0) throw context.Range("PBW");
+                context?.Finite(shift, "PBY");
+                widths.Add(width);
+                shifts.Add(shift);
                 curveTypes.Add("");
             }
 
+            context?.Finite(MilliSecFromTick(offset, bpm), "PBS");
+            context?.Finite(pit[0].Value * 10, "PBS");
             result.Add(new UtauMode2NotePitchData(
                 bpm,
                 MilliSecFromTick(offset, bpm),
@@ -110,7 +125,7 @@ internal static class UtauMode2PitchConversion
     }
 
     public static PitchModel? PitchFromUtauMode2Track(
-        UtauMode2TrackPitchData? pitchData, List<Note> notes, List<Tempo> tempos)
+        UtauMode2TrackPitchData? pitchData, List<Note> notes, List<Tempo> tempos, UstPitchContext? context = null)
     {
         if (pitchData is null) return null;
 
@@ -126,20 +141,23 @@ internal static class UtauMode2PitchConversion
         {
             var note = notes[i];
             var notePitch = pitchData.Notes[i];
+            context?.AtNote(i);
             var points = new List<(long Tick, double Value)>();
             var noteStartInMillis = tickTimeTransformer.TickToMilliSec(note.TickOn);
+            context?.Finite(noteStartInMillis, "PBS");
 
             if (notePitch?.Start is not null)
             {
+                context?.Source(notePitch.Widths.Count + 1L, "PBW");
                 var posInMillis = noteStartInMillis + notePitch.Start.Value;
                 var tickPos = Math.Max(
-                    tickTimeTransformer.SecToTick(posInMillis / 1000.0),
-                    lastKeyPos + UstConstants.SafeSamplingIntervalTick);
+                    context?.Tick(tickTimeTransformer, posInMillis, "PBS") ?? tickTimeTransformer.SecToTick(posInMillis / 1000.0),
+                    context?.Add(lastKeyPos, UstConstants.SafeSamplingIntervalTick, "PBS") ?? lastKeyPos + UstConstants.SafeSamplingIntervalTick);
                 lastKeyPos = tickPos;
 
                 double startShift;
                 if (note.TickOn == lastNote?.TickOff)
-                    startShift = (double)(lastNote.Key - note.Key);
+                    startShift = (double)lastNote.Key - note.Key;
                 else
                     startShift = (notePitch.StartShift ?? 0.0) / 10.0;
 
@@ -153,8 +171,8 @@ internal static class UtauMode2PitchConversion
 
                     posInMillis += width;
                     tickPos = Math.Max(
-                        tickTimeTransformer.SecToTick(posInMillis / 1000.0),
-                        lastKeyPos + UstConstants.SafeSamplingIntervalTick);
+                        context?.Tick(tickTimeTransformer, posInMillis, $"PBW[{index}]") ?? tickTimeTransformer.SecToTick(posInMillis / 1000.0),
+                        context?.Add(lastKeyPos, UstConstants.SafeSamplingIntervalTick, $"PBW[{index}]") ?? lastKeyPos + UstConstants.SafeSamplingIntervalTick);
                     lastKeyPos = tickPos;
 
                     var thisPoint = (tickPos, shift / 10.0);
@@ -162,8 +180,14 @@ internal static class UtauMode2PitchConversion
 
                     if (Math.Abs(thisPoint.Item2 - lastPoint.Item2) > double.Epsilon)
                     {
-                        var interpolated = Interpolate(lastPoint, thisPoint, curveType);
-                        points.AddRange(interpolated.Skip(1));
+                        context?.Curve(lastPoint.Item1, thisPoint.Item1, lastPoint.Item2, thisPoint.Item2, curveType);
+                        if (context?.ValidateOnly == true) points.Add(thisPoint);
+                        else
+                        {
+                            var interpolated = Interpolate(lastPoint, thisPoint, curveType);
+                            context?.Values(interpolated, "PBY");
+                            points.AddRange(interpolated.Skip(1));
+                        }
                     }
                     else
                     {
@@ -179,14 +203,17 @@ internal static class UtauMode2PitchConversion
                 .FixPointsAtLastNote(note, lastNote)
                 .AppendStartPoint(note)
                 .AppendEndPoint(note)
-                .AppendUtauNoteVibrato(notePitch?.VibratoParams, note, tickTimeTransformer, UstConstants.SamplingIntervalTick)
+                .AppendUtauNoteVibrato(notePitch?.VibratoParams, note, tickTimeTransformer, UstConstants.SamplingIntervalTick, context)
                 .Shape();
+            context?.Values(pendingPitchPoints, "PBY");
+            context?.Samples(pendingPitchPoints.Count, "pitch");
+            if (context?.ValidateOnly == true) pendingPitchPoints.Clear();
 
             lastNote = note;
         }
 
         pitchPoints.AddRange(pendingPitchPoints);
-        return new PitchModel(pitchPoints.Select(p => (p.Tick, (double?)p.Value)).ToList(), false);
+        return context?.ValidateOnly == true ? null : new PitchModel(pitchPoints.Select(p => (p.Tick, (double?)p.Value)).ToList(), false);
     }
 
     private static List<(long Tick, double Value)> FixPointsAtLastNote(
@@ -286,15 +313,20 @@ internal static class UtauMode2PitchConversion
         UtauNoteVibratoParams? vibratoParams,
         Note thisNote,
         TickTimeTransformer tickTimeTransformer,
-        long sampleIntervalTick)
+        long sampleIntervalTick, UstPitchContext? context = null)
     {
         if (vibratoParams is null) return points;
 
         var noteLength = tickTimeTransformer.TickDistanceToMilliSec(thisNote.TickOn, thisNote.TickOff);
         var vibratoLength = noteLength * vibratoParams.Length / 100.0;
+        context?.Finite(noteLength, "VBR");
+        context?.Finite(vibratoLength, "VBR[0]");
+        if (context is not null && noteLength <= 0 && vibratoParams.Length > 0 && vibratoParams.Depth > 0)
+            throw context.Range("VBR");
         if (vibratoLength <= 0) return points;
 
         var frequency = 1.0 / vibratoParams.Period;
+        context?.Finite(frequency, "VBR[1]");
         if (!double.IsFinite(frequency)) return points;
 
         var depth = vibratoParams.Depth / 100.0;
@@ -304,6 +336,10 @@ internal static class UtauMode2PitchConversion
         var easeOutLength = noteLength * vibratoParams.FadeOut / 100.0;
         var phase = vibratoParams.PhaseShift / 100.0;
         var shift = vibratoParams.Shift / 100.0;
+        context?.Finite(easeInLength, "VBR[3]");
+        context?.Finite(easeOutLength, "VBR[4]");
+        context?.Finite(depth * (1 + Math.Abs(shift)), "VBR[6]");
+        context?.Finite(2 * Math.PI * (Math.Abs(frequency) * (Math.Abs(noteLength) + Math.Abs(vibratoLength)) + Math.Abs(phase)), "VBR[1]");
 
         var start = noteLength - vibratoLength;
 
@@ -325,11 +361,16 @@ internal static class UtauMode2PitchConversion
         var noteStartInMillis = tickTimeTransformer.TickToMilliSec(thisNote.TickOn);
 
         var sampleIntervalInMillis = tickTimeTransformer.TickDistanceToMilliSec(
-            thisNote.TickOn, thisNote.TickOn + sampleIntervalTick);
+            thisNote.TickOn, context?.Add(thisNote.TickOn, sampleIntervalTick, "VBR") ?? thisNote.TickOn + sampleIntervalTick);
+        if (context is not null && (!double.IsFinite(sampleIntervalInMillis) || sampleIntervalInMillis <= 0))
+            throw context.Range("VBR");
 
         var millisPoints = points
             .Select(p => (MilliSec: tickTimeTransformer.TickToMilliSec(p.Tick) - noteStartInMillis, Value: p.Value))
             .ToList();
+        if (context is not null)
+            foreach (var p in millisPoints) context.Finite(p.MilliSec, "VBR");
+        if (context?.ValidateOnly == true) return points;
 
         var result = new List<(double MilliSec, double Value)>();
 
@@ -341,18 +382,32 @@ internal static class UtauMode2PitchConversion
             {
                 var lastPoint = result[^1];
                 var pos = lastPoint.MilliSec + sampleIntervalInMillis;
+                if (context is not null && pos <= lastPoint.MilliSec && pos < newPoint.MilliSec)
+                    throw context.Range("VBR");
+                // Reject enormous ranges before starting a sampling loop. The
+                // per-point check below also handles floating-point endpoints.
+                var estimated = (newPoint.MilliSec - pos) / sampleIntervalInMillis;
+                context?.Preview(Math.Max(0, Math.Floor(estimated) - 2), "VBR");
                 while (pos < newPoint.MilliSec)
                 {
-                    result.Add((pos, lastPoint.Value + Vibrato(pos)));
-                    pos += sampleIntervalInMillis;
+                    context?.Samples(1, "VBR");
+                    var value = lastPoint.Value + Vibrato(pos);
+                    context?.Finite(value, "VBR");
+                    result.Add((pos, value));
+                    var next = pos + sampleIntervalInMillis;
+                    if (context is not null && next <= pos) throw context.Range("VBR");
+                    pos = next;
                 }
             }
 
+            context?.Finite(newPoint.Value, "VBR");
+            context?.Samples(1, "VBR");
             result.Add(newPoint);
         }
 
         return result
-            .Select(p => (tickTimeTransformer.SecToTick((p.MilliSec + noteStartInMillis) / 1000.0), p.Value))
+            .Select(p => (context?.Tick(tickTimeTransformer, p.MilliSec + noteStartInMillis, "VBR")
+                ?? tickTimeTransformer.SecToTick((p.MilliSec + noteStartInMillis) / 1000.0), p.Value))
             .ToList();
     }
 }

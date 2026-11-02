@@ -12,7 +12,7 @@ internal static class UstInput
     private static readonly string[] NoteFields =
         ["Length", "Lyric", "NoteNum", "PBS", "PBW", "PBY", "PBM", "VBR", "Piches", "Pitches", "PitchBend"];
 
-    public static Dictionary<int, long> Validate(string[] lines, string filePath)
+    public static Dictionary<int, long> Validate(string[] lines, string filePath, UstPitchBudget budget)
     {
         var lengths = new Dictionary<int, long>();
         var totalTicks = 0L;
@@ -45,12 +45,16 @@ internal static class UstInput
             if (noteSection is null && NoteFields.Any(field => line.StartsWith(field + "=", StringComparison.Ordinal)))
                 throw new ProjectInputException("UST_SECTION", At(lineNumber, "section"),
                     "Note and pitch fields require a numeric note or rest section.");
+            if (line.StartsWith("PBM=", StringComparison.Ordinal))
+                CountPitchCells(line[4..], false, At(lineNumber, "PBM"), budget);
 
             foreach (var field in NumericFields)
             {
                 if (!line.StartsWith(field + "=", StringComparison.Ordinal)) continue;
                 var value = line[(line.IndexOf('=') + 1)..];
                 var path = At(lineNumber, field);
+                if (field is "PBS" or "PBW" or "PBY" or "VBR" or "Piches" or "Pitches" or "PitchBend")
+                    CountPitchCells(value, field == "PBS", path, budget);
                 var cells = field == "PBS" ? value.Split([';', ','])
                     : field is "PBW" or "PBY" or "VBR" or "Piches" or "Pitches" or "PitchBend" ? value.Split(',')
                     : [field == "Tempo" ? value.Replace(',', '.') : value];
@@ -93,6 +97,14 @@ internal static class UstInput
 
     public static bool IsSection(string line) =>
         line.StartsWith("[#", StringComparison.Ordinal) && line.EndsWith(']');
+
+    private static void CountPitchCells(string value, bool semicolon, string path, UstPitchBudget budget)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return;
+        var count = 1L;
+        foreach (var c in value) if (c == ',' || semicolon && c == ';') count++;
+        budget.Spend(count, path);
+    }
 
     public static bool IsNoteSection(string section)
     {

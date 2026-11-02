@@ -32,6 +32,11 @@ var ustExportEncodingOption = new Option<string?>("--ust-export-encoding")
 {
     Description = "UST output encoding name or code page (default: shift_jis / 932)",
 };
+var ustMaxSamplesOption = new Option<int>("--ust-max-pitch-samples")
+{
+    Description = "Maximum UST pitch processing budget (control points, samples and simplification work)",
+    DefaultValueFactory = _ => new UstImportOptions().MaxPitchSamples,
+};
 
 var recoverOption = new Option<bool>("--recover") { Description = "Recover damaged SVP/S5P data with explicit loss diagnostics" };
 var numericStringsOption = new Option<bool>("--svp-numeric-strings") { Description = "Allow SVP numeric strings with a warning (also enabled by --recover)" };
@@ -92,6 +97,7 @@ var rootCommand = new RootCommand("UtaFormatix — Convert singing voice synthes
     simpleImportOption,
     ustImportEncodingOption,
     ustExportEncodingOption,
+    ustMaxSamplesOption,
     recoverOption,
     numericStringsOption,
     maxFileOption,
@@ -120,6 +126,7 @@ rootCommand.SetAction(async (parseResult) =>
     var simpleImport = parseResult.GetValue(simpleImportOption);
     var ustImportEncoding = parseResult.GetValue(ustImportEncodingOption);
     var ustExportEncoding = parseResult.GetValue(ustExportEncodingOption);
+    var ustMaxSamples = parseResult.GetValue(ustMaxSamplesOption);
     var defaultLyric = parseResult.GetValue(defaultLyricOption)!;
     var convertPitch = parseResult.GetValue(convertPitchOption);
     var convertPhonemes = parseResult.GetValue(convertPhonemesOption);
@@ -218,7 +225,8 @@ rootCommand.SetAction(async (parseResult) =>
 
     var importParams = new ImportParams(
         SimpleImport: simpleImport,
-        DefaultLyric: defaultLyric) { Svp = svpOptions, S5p = s5pOptions, Ust = new UstImportOptions(ustImportEncoding) };
+        DefaultLyric: defaultLyric) { Svp = svpOptions, S5p = s5pOptions,
+            Ust = new UstImportOptions(ustImportEncoding) { MaxPitchSamples = ustMaxSamples } };
 
     Project project;
     try
@@ -292,6 +300,11 @@ rootCommand.SetAction(async (parseResult) =>
         Console.Error.WriteLine("Error: --ust-export-encoding applies only to UST output.");
         return 1;
     }
+    if (inputFormat != Format.Ust && outputFormat != Format.Ust && ustMaxSamples != new UstImportOptions().MaxPitchSamples)
+    {
+        Console.Error.WriteLine("Error: --ust-max-pitch-samples requires UST input or output.");
+        return 1;
+    }
 
     var features = new List<FeatureConfig>();
     if (convertPitch && outputFormat.AvailableFeaturesForGeneration.Contains(Feature.ConvertPitch))
@@ -356,7 +369,7 @@ rootCommand.SetAction(async (parseResult) =>
                     break;
                 case nameof(Format.Ust):
                     Ust.GenerateFile(project, temporaryPath, features,
-                        ustExportEncoding is null ? null : new UstExportOptions(ustExportEncoding));
+                        new UstExportOptions(ustExportEncoding ?? "shift_jis") { MaxPitchSamples = ustMaxSamples });
                     break;
                 case nameof(Format.Ustx):
                     Ustx.GenerateFile(project, temporaryPath, features);

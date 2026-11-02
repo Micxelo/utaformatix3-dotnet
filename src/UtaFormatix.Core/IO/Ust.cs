@@ -17,7 +17,9 @@ public static class Ust
     public static Project Parse(string[] filePaths, ImportParams? importParams = null)
     {
         var parameters = importParams ?? new ImportParams();
-        var results = filePaths.Select(path => ParseFile(path, parameters.Ust)).ToList();
+        var budget = new UstPitchBudget(parameters.Ust?.MaxPitchSamples ?? new UstImportOptions().MaxPitchSamples);
+        budget.Spend(0, "$.ust.maxPitchSamples");
+        var results = filePaths.Select(path => ParseFile(path, parameters.Ust, budget)).ToList();
 
         var projectName = filePaths.Length == 1
             ? Path.GetFileNameWithoutExtension(filePaths[0])
@@ -28,13 +30,12 @@ public static class Ust
         {
             var result = results[i];
             PitchModel? pitch = null;
-            if (!parameters.SimpleImport)
-            {
-                pitch = result.IsMode2
-                    ? UtauMode2PitchConversion.PitchFromUtauMode2Track(result.PitchDataMode2, result.Notes,
-                        result.Tempos.Count > 0 ? result.Tempos : [new Tempo(0, Constants.DefaultBpm)])
-                    : UtauMode1PitchConversion.PitchFromUtauMode1Track(result.PitchDataMode1, result.Notes);
-            }
+            var context = new UstPitchContext(budget, parameters.SimpleImport,
+                (index, field) => result.PitchSources[index].At(field));
+            pitch = result.IsMode2
+                ? UtauMode2PitchConversion.PitchFromUtauMode2Track(result.PitchDataMode2, result.Notes,
+                    result.Tempos.Count > 0 ? result.Tempos : [new Tempo(0, Constants.DefaultBpm)], context)
+                : UtauMode1PitchConversion.PitchFromUtauMode1Track(result.PitchDataMode1, result.Notes, context);
 
             tracks.Add(new Track(i, result.FileName, result.Notes, pitch).ValidateNotes());
         }
@@ -82,17 +83,19 @@ public static class Ust
         return tempos;
     }
 
-    private static FileParseResult ParseFile(string filePath, UstImportOptions? options)
+    private static FileParseResult ParseFile(string filePath, UstImportOptions? options, UstPitchBudget budget)
     {
         var lines = UstEncoding.ReadFile(filePath, options)
             .Split(["\r\n", "\n", "\r"], StringSplitOptions.None);
-        var lengths = UstInput.Validate(lines, filePath);
+        var lengths = UstInput.Validate(lines, filePath, budget);
         var warnings = new List<ImportWarning>();
 
         string? projectName = null;
         var notes = new List<Note>();
         var notePitchDataListMode1 = new List<UtauMode1NotePitchData>();
         var notePitchDataListMode2 = new List<UtauMode2NotePitchData>();
+        var pitchSources = new List<PitchSource>();
+        var pendingPitchLines = new Dictionary<string, int>();
         var tempos = new Dictionary<long, double>();
         var tempoLines = new Dictionary<long, int>();
         var isHeader = true;
@@ -158,6 +161,7 @@ public static class Ust
                     pendingPBS?.Start, pendingPBS?.StartShift, pendingPBW ?? [], pendingPBY ?? [],
                     pendingPBM ?? [], ParseVibrato(pendingVBR)));
                 notePitchDataListMode1.Add(new UtauMode1NotePitchData(pendingPitchBend));
+                pitchSources.Add(new PitchSource(filePath, pendingSectionLine, pendingPitchLines));
             }
             else if (pendingSection is not null && !pendingRest)
             {
@@ -174,6 +178,7 @@ public static class Ust
 
         List<double> ParsePitchNumbers(string text, string field, int lineNumber, out int specifiedCount, bool allowEmpty = true)
         {
+            pendingPitchLines[field] = lineNumber;
             var cells = text.Split(',');
             var values = new List<double>(cells.Length);
             specifiedCount = 0;
@@ -256,6 +261,7 @@ public static class Ust
                 pendingPBM = null;
                 pendingVBR = null;
                 pendingPitchBend = null;
+                pendingPitchLines = new Dictionary<string, int>();
                 pendingSection = UstInput.IsNoteSection(line) ? line : null;
                 pendingSectionLine = lineNumber;
                 pendingLyricLine = null;
@@ -316,6 +322,7 @@ public static class Ust
             {
                 if (TryGetValue(line, "PBS", out var pbsVal))
                 {
+                    pendingPitchLines["PBS"] = lineNumber;
                     var cells = pbsVal.Split([';', ',']);
                     if (double.TryParse(cells[0], System.Globalization.NumberStyles.Float,
                         System.Globalization.CultureInfo.InvariantCulture, out var start))
@@ -407,6 +414,7 @@ public static class Ust
             isMode2,
             pitchDataMode1,
             pitchDataMode2,
+            pitchSources,
             warnings);
     }
 
@@ -440,6 +448,20 @@ public static class Ust
         return true;
     }
 
+    private sealed record PitchSource(string File, int SectionLine, Dictionary<string, int> Lines)
+    {
+        public string At(string field)
+        {
+            var index = field.IndexOf('[');
+            var key = index < 0 ? field : field[..index];
+            if (key == "PitchBend" && !Lines.ContainsKey(key))
+                key = Lines.ContainsKey("Piches") ? "Piches" : Lines.ContainsKey("Pitches") ? "Pitches" : key;
+            var line = Lines.GetValueOrDefault(key, SectionLine);
+            if (key != (index < 0 ? field : field[..index])) field = key + (index < 0 ? "" : field[index..]);
+            return $"{File}:{line + 1} ({field})";
+        }
+    }
+
     private sealed record FileParseResult(
         string FilePath,
         string FileName,
@@ -448,6 +470,7 @@ public static class Ust
         bool IsMode2,
         UtauMode1TrackPitchData? PitchDataMode1,
         UtauMode2TrackPitchData? PitchDataMode2,
+        List<PitchSource> PitchSources,
         List<ImportWarning> Warnings);
 
     public static (byte[] Data, string FileName, List<ExportNotification> Notifications) Generate(
@@ -458,6 +481,8 @@ public static class Ust
         Project project, IEnumerable<FeatureConfig>? features, UstExportOptions? options)
     {
         UstInput.ValidateForExport(project);
+        var budget = new UstPitchBudget(options?.MaxPitchSamples ?? new UstExportOptions().MaxPitchSamples);
+        budget.Spend(0, "$.ust.maxPitchSamples");
         var encoding = UstEncoding.ForExport(options);
         var featureList = features?.ToList() ?? [];
         var notifications = new List<ExportNotification>();
@@ -474,7 +499,9 @@ public static class Ust
             for (var trackIndex = 0; trackIndex < project.Tracks.Count; trackIndex++)
             {
                 var track = project.Tracks[trackIndex];
-                var content = GenerateTrackContent(project, track, featureList);
+                var context = new UstPitchContext(budget, false,
+                    (note, field) => $"$.tracks[{trackIndex}].pitch ({field}, note {note})");
+                var content = GenerateTrackContent(project, track, featureList, context);
                 var contentBytes = UstEncoding.Encode(content, encoding, trackIndex);
                 var trackNameSafe = GetSafeFileName(track.Name);
                 var entryName = $"{project.Name}_{track.Id + 1}_{trackNameSafe}.{Format.Ust.Extension}";
@@ -496,7 +523,7 @@ public static class Ust
         File.WriteAllBytes(filePath, data);
     }
 
-    private static string GenerateTrackContent(Project project, Track track, List<FeatureConfig> features)
+    private static string GenerateTrackContent(Project project, Track track, List<FeatureConfig> features, UstPitchContext context)
     {
         var sb = new StringBuilder();
 
@@ -532,10 +559,10 @@ public static class Ust
         IncreaseNextTempoIndex();
 
         var pitchDataMode1 = features.Contains(Feature.ConvertPitch)
-            ? UtauMode1PitchConversion.PitchToUtauMode1Track(track.Pitch, track.Notes)
+            ? UtauMode1PitchConversion.PitchToUtauMode1Track(track.Pitch, track.Notes, context)
             : null;
         var pitchDataMode2 = features.Contains(Feature.ConvertPitch)
-            ? UtauMode2PitchConversion.PitchToUtauMode2Track(track.Pitch, track.Notes, project.Tempos)
+            ? UtauMode2PitchConversion.PitchToUtauMode2Track(track.Pitch, track.Notes, project.Tempos, context)
             : null;
 
         for (var i = 0; i < track.Notes.Count; i++)
