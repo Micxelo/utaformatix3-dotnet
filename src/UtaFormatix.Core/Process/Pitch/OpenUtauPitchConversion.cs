@@ -224,10 +224,19 @@ internal static class OpenUtauPitchConversion
         if (data is null || data.Count == 0) return [];
 
         return data
-            .Select(p => (Tick: p.Tick, Value: Math.Round(p.Value * 100, MidpointRounding.ToPositiveInfinity)))
+            .Select(p => (Tick: p.Tick, Value: RoundToCents(p.Value)))
             .ToList()
             .AppendPitchPointsForOpenUtauOutput()
             .ReduceRepeatedPitchPoints();
+    }
+
+    private static double RoundToCents(double pitch)
+    {
+        var cents = pitch * 100;
+        var rounded = Math.Round(cents);
+        // Kotlin roundToInt chooses the nearest integer, with ties toward +infinity.
+        // Adjust only exact ties; adding 0.5 would misround adjacent doubles.
+        return cents - rounded == 0.5 ? rounded + 1 : rounded;
     }
 
     private static List<(long Tick, double Value)> InterpolatePoints(
