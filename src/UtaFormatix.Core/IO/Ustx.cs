@@ -38,12 +38,32 @@ public static class Ustx
 
     public static Project Parse(string filePath, ImportParams? importParams = null)
     {
-        var yamlText = File.ReadAllText(filePath);
+        var warnings = new List<ImportWarning>();
+        var input = new UstxInput(filePath, warnings);
+        var yamlText = input.ReadText();
         var deserializer = new StaticDeserializerBuilder(new UstxYamlContext())
             .WithNamingConvention(UnderscoredNamingConvention.Instance)
             .IgnoreUnmatchedProperties()
+            .WithDuplicateKeyChecking()
             .Build();
-        var ustxProject = UstxYamlParser.Deserialize<UstxProject>(deserializer, yamlText);
+        UstxProject ustxProject;
+        try
+        {
+            ustxProject = UstxYamlParser.Deserialize<UstxProject>(deserializer, yamlText, input.Attach);
+            input.Complete();
+        }
+        catch (YamlException error)
+        {
+            Exception cause = error;
+            while (cause.InnerException is { } inner)
+            {
+                if (inner is ProjectInputException diagnostic) throw diagnostic;
+                cause = inner;
+            }
+            throw input.Error("USTX_YAML", input.LastPath,
+                $"YAML ({error.Start}) - ({error.End}): {cause.Message}");
+        }
+        input.Normalize(ustxProject);
 
         var tempos = ParseTempos(ustxProject);
         var timeSignatures = ParseTimeSignatures(ustxProject);
@@ -56,7 +76,7 @@ public static class Ustx
             TimeSignatures: timeSignatures,
             Tempos: tempos,
             MeasurePrefix: 0,
-            ImportWarnings: []);
+            ImportWarnings: warnings);
     }
 
     private static List<Tempo> ParseTempos(UstxProject project)
@@ -92,7 +112,7 @@ public static class Ustx
         foreach (var voicePart in project.VoiceParts)
         {
             var trackId = voicePart.TrackNo;
-            if (!trackMap.TryGetValue(trackId, out var track)) continue;
+            var track = trackMap[trackId];
 
             var tickPrefix = voicePart.Position;
             var notes = voicePart.Notes.Select(n =>
@@ -119,8 +139,8 @@ public static class Ustx
                     Key: n.Tone,
                     Lyric: lyric,
                     Phoneme: phoneme,
-                    TickOn: n.Position + tickPrefix,
-                    TickOff: n.Position + n.Duration + tickPrefix);
+                    TickOn: checked(n.Position + tickPrefix),
+                    TickOff: checked(n.Position + tickPrefix + n.Duration));
             }).ToList();
 
             List<OpenUtauNotePitchData>? notePitches = null;
@@ -129,8 +149,6 @@ public static class Ustx
                 notePitches = voicePart.Notes.Select(ParseNotePitch).ToList();
             }
 
-            var (validatedNotes, validatedNotePitches) = GetValidatedNotes(notes, notePitches);
-
             OpenUtauPartPitchData.Point[]? pitchCurve = null;
             if (!parameters.SimpleImport)
             {
@@ -138,25 +156,25 @@ public static class Ustx
                 if (curve is not null)
                 {
                     pitchCurve = curve.Xs.Zip(curve.Ys)
-                        .Select(xy => new OpenUtauPartPitchData.Point(xy.First + tickPrefix, (int)xy.Second))
+                        .Select(xy => new OpenUtauPartPitchData.Point(checked(xy.First + tickPrefix), checked((int)xy.Second)))
                         .ToArray();
                 }
             }
 
             PitchModel? pitch = null;
-            if ((validatedNotePitches is { Count: > 0 } || pitchCurve is { Length: > 0 }))
+            if ((notePitches is { Count: > 0 } || pitchCurve is { Length: > 0 }))
             {
                 var partPitchData = new OpenUtauPartPitchData(
                     pitchCurve?.ToList() ?? [],
-                    validatedNotePitches ?? []);
-                pitch = OpenUtauPitchConversion.PitchFromUstxPart(validatedNotes, partPitchData, tempos);
+                    notePitches ?? []);
+                pitch = OpenUtauPitchConversion.PitchFromUstxPart(notes, partPitchData, tempos);
             }
 
             var mergedPitch = OpenUtauPitchConversion.MergePitchFromUstxParts(track.Pitch, pitch);
             trackMap[trackId] = new Track(
                 track.Id,
                 track.Name,
-                track.Notes.Concat(validatedNotes).ToList(),
+                track.Notes.Concat(notes).ToList(),
                 mergedPitch);
         }
 
@@ -164,7 +182,7 @@ public static class Ustx
             .Select(t => new Track(
                 t.Id,
                 t.Name,
-                t.Notes.Select((n, i) => n with { Id = i }).ToList(),
+                t.Notes.OrderBy(n => n.TickOn).Select((n, i) => n with { Id = i }).ToList(),
                 t.Pitch.ReduceRepeatedPitchPointsFromUstxTrack()))
             .OrderBy(t => t.Id)
             .ToList();
@@ -186,28 +204,6 @@ public static class Ustx
             Shift: v.Drift);
 
         return new OpenUtauNotePitchData(points, vibrato);
-    }
-
-    private static (List<Note> Notes, List<OpenUtauNotePitchData>? Pitches) GetValidatedNotes(
-        List<Note> notes, List<OpenUtauNotePitchData>? notePitches)
-    {
-        var validatedNotes = new List<Note>();
-        var validatedNotePitches = notePitches is not null ? new List<OpenUtauNotePitchData>() : null;
-        var pos = 0L;
-
-        for (var i = 0; i < notes.Count; i++)
-        {
-            var note = notes[i];
-            if (note.TickOn >= pos)
-            {
-                validatedNotes.Add(note);
-                if (notePitches is not null)
-                    validatedNotePitches!.Add(notePitches[i]);
-                pos = note.TickOff;
-            }
-        }
-
-        return (validatedNotes, validatedNotePitches);
     }
 
     public static void GenerateFile(Project project, string filePath, IEnumerable<FeatureConfig>? features = null)

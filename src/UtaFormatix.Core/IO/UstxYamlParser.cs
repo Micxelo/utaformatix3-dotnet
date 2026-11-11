@@ -8,10 +8,13 @@ internal sealed class UstxYamlParser(IParser parser, string marker) : IParser
 {
     public ParsingEvent? Current { get; private set; }
 
-    public static T Deserialize<T>(IDeserializer deserializer, string text)
+    public static T Deserialize<T>(IDeserializer deserializer, string text, Func<IParser, IParser>? decorate = null)
     {
         if (!text.AsSpan().ContainsAny('\u0085', '\u2028', '\u2029'))
-            return deserializer.Deserialize<T>(text);
+        {
+            var plain = new Parser(new StringReader(text));
+            return deserializer.Deserialize<T>(decorate?.Invoke(plain) ?? plain);
+        }
 
         var positions = new List<long>();
         for (var i = 0; i < text.Length; i++)
@@ -46,7 +49,7 @@ internal sealed class UstxYamlParser(IParser parser, string marker) : IParser
             if (!collision)
             {
                 var preserving = new UstxYamlParser(ParseProtected(candidate), candidate);
-                try { return deserializer.Deserialize<T>(preserving); }
+                try { return deserializer.Deserialize<T>(decorate?.Invoke(preserving) ?? preserving); }
                 catch (YamlException error) { throw Remap(error, positions, candidate.Length); }
             }
         }
