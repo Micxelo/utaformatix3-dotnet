@@ -242,6 +242,17 @@ internal static class OpenUtauPitchConversion
     {
         if (pitch is null) return [];
         context.Samples(pitch.Data.Count, "");
+
+        // Distinct input values are ambiguous even if they round to the same cent.
+        var valuesByTick = new Dictionary<long, double>();
+        for (var i = 0; i < pitch.Data.Count; i++)
+        {
+            var (tick, value) = pitch.Data[i];
+            if (value is { } definedValue &&
+                !valuesByTick.TryAdd(tick, definedValue) && valuesByTick[tick] != definedValue)
+                throw context.ConflictingPitch($".values[{i}]", tick);
+        }
+
         var data = PitchCalculation.ConvertRelativity(pitch, notes, toAbsolute: false);
         if (data is null || data.Count == 0) return [];
 
@@ -257,9 +268,18 @@ internal static class OpenUtauPitchConversion
                 throw context.Range($".values[{i}]");
             points.Add((tick, cents));
         }
-        return PitchCalculation.AppendPitchPointsForInterpolation(points, SamplingIntervalTick,
+        var curve = PitchCalculation.AppendPitchPointsForInterpolation(points, SamplingIntervalTick,
                 () => context.Samples(1, ""))
             .ReduceRepeatedPitchPoints();
+
+        // Hold points can collide with other points when the input is out of order.
+        valuesByTick.Clear();
+        foreach (var (tick, cents) in curve)
+        {
+            if (!valuesByTick.TryAdd(tick, cents) && valuesByTick[tick] != cents)
+                throw context.ConflictingPitch("", tick);
+        }
+        return curve;
     }
 
     private static double RoundToCents(double pitch)

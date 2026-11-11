@@ -38,6 +38,9 @@ internal sealed class UstxPitchContext
     public ProjectInputException Range(string field) => new("USTX_RANGE", Location(field),
         "Pitch calculation is outside the supported numeric, tick, or output-field range.");
 
+    public ProjectInputException ConflictingPitch(string field, long tick) =>
+        new("USTX_DUPLICATE", Location(field), $"Conflicting pitch values at tick {tick}.");
+
     public double Finite(double value, string field)
     {
         if (!double.IsFinite(value)) throw Range(field);
