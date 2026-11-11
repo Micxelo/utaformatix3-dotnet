@@ -23,7 +23,7 @@ internal static class PitchCalculation
             .Select(p => (p.Tick, p.Value!.Value))
             .ToList();
 
-    private static List<(long Tick, double? Value)>? ConvertRelativity(
+    internal static List<(long Tick, double? Value)>? ConvertRelativity(
         PitchModel pitch, List<Note> notes, bool toAbsolute, long borderAppendRadius = 0L)
     {
         if (pitch.IsAbsolute && toAbsolute) return pitch.Data;
@@ -37,7 +37,7 @@ internal static class PitchCalculation
 
         var result = pitch.Data.Select(point =>
         {
-            while (point.Tick >= nextBorder)
+            while (index < borders.Count && point.Tick >= nextBorder)
             {
                 index++;
                 nextBorder = index < borders.Count ? borders[index] : long.MaxValue;
@@ -75,7 +75,7 @@ internal static class PitchCalculation
             if (pos == note.TickOn)
                 borders.Add(pos);
             else if (pos < note.TickOn)
-                borders.Add((note.TickOn + pos) / 2);
+                borders.Add(Midpoint(pos, note.TickOn));
             else
                 throw new NotesOverlappingException();
             pos = note.TickOff;
@@ -117,7 +117,7 @@ internal static class PitchCalculation
     }
 
     public static List<(long Tick, double Value)> AppendPitchPointsForInterpolation(
-        List<(long Tick, double Value)> points, long intervalTick)
+        List<(long Tick, double Value)> points, long intervalTick, Action? reservePoint = null)
     {
         if (points.Count == 0) return points;
 
@@ -127,21 +127,26 @@ internal static class PitchCalculation
         {
             var lastPoint = points[i];
             var thisPoint = points[i + 1];
-            var tickDiff = thisPoint.Tick - lastPoint.Tick;
+            var tickDiff = (Int128)thisPoint.Tick - lastPoint.Tick;
 
             (long Tick, double Value)? newPoint = null;
             if (tickDiff >= 1 * intervalTick && tickDiff < 2 * intervalTick)
-                newPoint = ((thisPoint.Tick + lastPoint.Tick) / 2, lastPoint.Value);
-            else if (tickDiff >= 2 * intervalTick)
+                newPoint = (Midpoint(lastPoint.Tick, thisPoint.Tick), lastPoint.Value);
+            else if (tickDiff >= (Int128)2 * intervalTick)
                 newPoint = (thisPoint.Tick - intervalTick, lastPoint.Value);
 
             if (newPoint is not null)
+            {
+                reservePoint?.Invoke();
                 result.Add(newPoint.Value);
+            }
             result.Add(thisPoint);
         }
 
         return result;
     }
+
+    private static long Midpoint(long left, long right) => (long)(((Int128)left + right) / 2);
 
     public static List<(long Tick, double Value)> ReduceRepeatedPitchPoints(
         this List<(long Tick, double Value)> points)

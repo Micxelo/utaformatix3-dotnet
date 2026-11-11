@@ -17,7 +17,8 @@ public static class Ust
     public static Project Parse(string[] filePaths, ImportParams? importParams = null)
     {
         var parameters = importParams ?? new ImportParams();
-        var budget = new UstPitchBudget(parameters.Ust?.MaxPitchSamples ?? new UstImportOptions().MaxPitchSamples);
+        var budget = new PitchSampleBudget(parameters.Ust?.MaxPitchSamples ?? new UstImportOptions().MaxPitchSamples,
+            "UST_LIMIT", "$.ust.maxPitchSamples");
         budget.Spend(0, "$.ust.maxPitchSamples");
         var results = filePaths.Select(path => ParseFile(path, parameters.Ust, budget)).ToList();
 
@@ -83,7 +84,7 @@ public static class Ust
         return tempos;
     }
 
-    private static FileParseResult ParseFile(string filePath, UstImportOptions? options, UstPitchBudget budget)
+    private static FileParseResult ParseFile(string filePath, UstImportOptions? options, PitchSampleBudget budget)
     {
         var lines = UstEncoding.ReadFile(filePath, options)
             .Split(["\r\n", "\n", "\r"], StringSplitOptions.None);
@@ -481,7 +482,8 @@ public static class Ust
         Project project, IEnumerable<FeatureConfig>? features, UstExportOptions? options)
     {
         UstInput.ValidateForExport(project);
-        var budget = new UstPitchBudget(options?.MaxPitchSamples ?? new UstExportOptions().MaxPitchSamples);
+        var budget = new PitchSampleBudget(options?.MaxPitchSamples ?? new UstExportOptions().MaxPitchSamples,
+            "UST_LIMIT", "$.ust.maxPitchSamples");
         budget.Spend(0, "$.ust.maxPitchSamples");
         var encoding = UstEncoding.ForExport(options);
         var featureList = features?.ToList() ?? [];

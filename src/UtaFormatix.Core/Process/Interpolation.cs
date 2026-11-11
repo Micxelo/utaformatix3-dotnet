@@ -5,7 +5,14 @@ internal static class Interpolation
     public static List<(long Tick, double Value)> InterpolateLinear(
         this List<(long Tick, double Value)> points, long samplingIntervalTick) =>
         points.Interpolate(samplingIntervalTick, (x0, y0, x1, y1, x) =>
-            y0 + (x - x0) * (y1 - y0) / (x1 - x0));
+        {
+            var value = y0 + (x - x0) * (y1 - y0) / (x1 - x0);
+            if (double.IsFinite(value)) return value;
+            // The unscaled product or difference can overflow even though
+            // the weighted sum of two finite endpoints is representable.
+            var fraction = (double)(x - x0) / (x1 - x0);
+            return (1.0 - fraction) * y0 + fraction * y1;
+        });
 
     public static List<(long Tick, double Value)> InterpolateCosineEaseInOut(
         this List<(long Tick, double Value)> points, long samplingIntervalTick) =>
@@ -43,6 +50,7 @@ internal static class Interpolation
         long samplingIntervalTick,
         Func<long, double, long, double, long, double> mapping)
     {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(samplingIntervalTick);
         if (points.Count == 0) return points;
 
         var result = new List<(long Tick, double Value)>();
@@ -54,10 +62,11 @@ internal static class Interpolation
 
             result.Add((x0, y0));
 
-            for (var x = x0 + 1; x < x1; x++)
+            // Compare the distance before advancing, including at Int64.MaxValue.
+            for (var x = x0; x < x1 && unchecked((ulong)x1 - (ulong)x) > (ulong)samplingIntervalTick;)
             {
-                if ((x - x0) % samplingIntervalTick == 0)
-                    result.Add((x, mapping(x0, y0, x1, y1, x)));
+                x += samplingIntervalTick;
+                result.Add((x, mapping(x0, y0, x1, y1, x)));
             }
         }
 

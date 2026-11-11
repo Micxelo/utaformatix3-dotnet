@@ -38,6 +38,8 @@ public static class Ustx
 
     public static Project Parse(string filePath, ImportParams? importParams = null)
     {
+        var parameters = importParams ?? new ImportParams();
+        var pitchContext = UstxPitchContext.Create(parameters.Ustx, filePath);
         var warnings = new List<ImportWarning>();
         var input = new UstxInput(filePath, warnings);
         var yamlText = input.ReadText();
@@ -67,7 +69,22 @@ public static class Ustx
 
         var tempos = ParseTempos(ustxProject);
         var timeSignatures = ParseTimeSignatures(ustxProject);
-        var tracks = ParseTracks(ustxProject, importParams ?? new ImportParams(), tempos);
+        var previousOffset = 0.0;
+        var time = new TickTimeTransformer(tempos, (index, rate, offset) =>
+        {
+            if (!double.IsFinite(rate) || rate <= 0)
+            {
+                var field = ustxProject.Tempos is { Count: > 0 } ? $"$.tempos[{index}].bpm" : "$.bpm";
+                throw input.Error("USTX_RANGE", field, "Tempo cannot be represented as a finite positive tick duration.");
+            }
+            if (!double.IsFinite(offset * 1000.0))
+                throw input.Error("USTX_RANGE", $"$.tempos[{index}].position", "Elapsed time to the tempo marker exceeds the millisecond range.");
+            if (!parameters.SimpleImport && index > 0 && tempos[index].TickPosition > tempos[index - 1].TickPosition &&
+                offset <= previousOffset)
+                throw input.Error("USTX_RANGE", $"$.tempos[{index}].position", "Distinct tempo markers collapse to the same elapsed time.");
+            previousOffset = offset;
+        });
+        var tracks = ParseTracks(ustxProject, parameters, time, pitchContext);
 
         return new Project(
             Format: Format.Ustx,
@@ -100,19 +117,23 @@ public static class Ustx
         return [new TimeSignature(0, project.BeatPerBar ?? 4, project.BeatUnit ?? 4)];
     }
 
-    private static List<Track> ParseTracks(UstxProject project, ImportParams parameters, List<Tempo> tempos)
+    private static List<Track> ParseTracks(UstxProject project, ImportParams parameters,
+        TickTimeTransformer time, UstxPitchContext pitchContext)
     {
-        var trackMap = new Dictionary<int, Track>();
+        var tracks = new List<Track>(project.Tracks.Count);
+        var pitchByTrack = new List<PitchModel>[project.Tracks.Count];
         for (var i = 0; i < project.Tracks.Count; i++)
         {
             var t = project.Tracks[i];
-            trackMap[i] = new Track(i, t.TrackName ?? $"Track {i + 1}", [], null);
+            tracks.Add(new Track(i, t.TrackName ?? $"Track {i + 1}", [], null));
+            pitchByTrack[i] = [];
         }
 
-        foreach (var voicePart in project.VoiceParts)
+        for (var partIndex = 0; partIndex < project.VoiceParts.Count; partIndex++)
         {
+            var voicePart = project.VoiceParts[partIndex];
             var trackId = voicePart.TrackNo;
-            var track = trackMap[trackId];
+            var track = tracks[trackId];
 
             var tickPrefix = voicePart.Position;
             var notes = voicePart.Notes.Select(n =>
@@ -143,48 +164,36 @@ public static class Ustx
                     TickOff: checked(n.Position + tickPrefix + n.Duration));
             }).ToList();
 
-            List<OpenUtauNotePitchData>? notePitches = null;
-            if (!parameters.SimpleImport)
+            track.Notes.AddRange(notes);
+            if (parameters.SimpleImport) continue;
+
+            var partContext = pitchContext.At($".voice_parts[{partIndex}]");
+            partContext.Samples(voicePart.Notes.Sum(note => (long)note.Pitch.Data.Count), ".notes");
+            var notePitches = voicePart.Notes.Select(ParseNotePitch).ToList();
+            var curveIndex = voicePart.Curves?.FindIndex(c => c.Abbr == PitchCurveAbbr) ?? -1;
+            List<OpenUtauPartPitchData.Point> pitchCurve = [];
+            if (curveIndex >= 0)
             {
-                notePitches = voicePart.Notes.Select(ParseNotePitch).ToList();
+                var curve = voicePart.Curves![curveIndex];
+                partContext.Samples(curve.Xs.Count, $".curves[{curveIndex}]");
+                pitchCurve = curve.Xs.Zip(curve.Ys)
+                    .Select(xy => new OpenUtauPartPitchData.Point(checked(xy.First + tickPrefix), checked((int)xy.Second)))
+                    .ToList();
             }
 
-            OpenUtauPartPitchData.Point[]? pitchCurve = null;
-            if (!parameters.SimpleImport)
-            {
-                var curve = voicePart.Curves?.FirstOrDefault(c => c.Abbr == PitchCurveAbbr);
-                if (curve is not null)
-                {
-                    pitchCurve = curve.Xs.Zip(curve.Ys)
-                        .Select(xy => new OpenUtauPartPitchData.Point(checked(xy.First + tickPrefix), checked((int)xy.Second)))
-                        .ToArray();
-                }
-            }
-
-            PitchModel? pitch = null;
-            if ((notePitches is { Count: > 0 } || pitchCurve is { Length: > 0 }))
-            {
-                var partPitchData = new OpenUtauPartPitchData(
-                    pitchCurve?.ToList() ?? [],
-                    notePitches ?? []);
-                pitch = OpenUtauPitchConversion.PitchFromUstxPart(notes, partPitchData, tempos);
-            }
-
-            var mergedPitch = OpenUtauPitchConversion.MergePitchFromUstxParts(track.Pitch, pitch);
-            trackMap[trackId] = new Track(
-                track.Id,
-                track.Name,
-                track.Notes.Concat(notes).ToList(),
-                mergedPitch);
+            if (notePitches.Count == 0 && pitchCurve.Count == 0) continue;
+            var partPitchData = new OpenUtauPartPitchData(pitchCurve, notePitches);
+            var pitch = OpenUtauPitchConversion.PitchFromUstxPart(notes, partPitchData, time, partContext, curveIndex);
+            if (pitch is not null) pitchByTrack[trackId].Add(pitch);
         }
 
-        return trackMap.Values
+        return tracks
             .Select(t => new Track(
                 t.Id,
                 t.Name,
                 t.Notes.OrderBy(n => n.TickOn).Select((n, i) => n with { Id = i }).ToList(),
-                t.Pitch.ReduceRepeatedPitchPointsFromUstxTrack()))
-            .OrderBy(t => t.Id)
+                OpenUtauPitchConversion.MergePitchFromUstxParts(pitchByTrack[t.Id], pitchContext.At($".tracks[{t.Id}].pitch"))
+                    .ReduceRepeatedPitchPointsFromUstxTrack()))
             .ToList();
     }
 
@@ -206,25 +215,33 @@ public static class Ustx
         return new OpenUtauNotePitchData(points, vibrato);
     }
 
-    public static void GenerateFile(Project project, string filePath, IEnumerable<FeatureConfig>? features = null)
+    public static void GenerateFile(Project project, string filePath, IEnumerable<FeatureConfig>? features = null) =>
+        GenerateFile(project, filePath, features, null);
+
+    public static void GenerateFile(Project project, string filePath, IEnumerable<FeatureConfig>? features, UstxPitchOptions? options)
     {
-        var yamlText = GenerateContent(project, features?.ToList() ?? []);
+        var yamlText = GenerateContent(project, features?.ToList() ?? [], options);
         File.WriteAllText(filePath, yamlText);
     }
 
     public static (byte[] Data, string Name, List<ExportNotification> Notifications) Generate(
-        Project project, IEnumerable<FeatureConfig>? features = null)
+        Project project, IEnumerable<FeatureConfig>? features = null) =>
+        Generate(project, features, null);
+
+    public static (byte[] Data, string Name, List<ExportNotification> Notifications) Generate(
+        Project project, IEnumerable<FeatureConfig>? features, UstxPitchOptions? options)
     {
         var featureList = features?.ToList() ?? [];
-        var yamlText = GenerateContent(project, featureList);
+        var yamlText = GenerateContent(project, featureList, options);
         var notifications = new List<ExportNotification>();
         if (featureList.Contains(Feature.ConvertPitch))
             notifications.Add(new ExportNotification.PitchDataExported());
         return (System.Text.Encoding.UTF8.GetBytes(yamlText), Format.Ustx.GetFileName(project.Name), notifications);
     }
 
-    private static string GenerateContent(Project project, List<FeatureConfig> features)
+    private static string GenerateContent(Project project, List<FeatureConfig> features, UstxPitchOptions? options)
     {
+        var pitchContext = UstxPitchContext.Create(options);
         var templateYamlText = LoadTemplate();
         var deserializer = new StaticDeserializerBuilder(new UstxYamlContext())
             .WithNamingConvention(UnderscoredNamingConvention.Instance)
@@ -243,7 +260,8 @@ public static class Ustx
         }).ToList();
 
         var voicePartTemplate = template.VoiceParts.First();
-        var voiceParts = project.Tracks.Select(t => GenerateVoicePart(voicePartTemplate, t, features)).ToList();
+        var voiceParts = project.Tracks.Select((t, index) =>
+            GenerateVoicePart(voicePartTemplate, t, features, pitchContext.At($".tracks[{index}]"))).ToList();
 
         var ustx = new UstxProject
         {
@@ -278,7 +296,7 @@ public static class Ustx
     }
 
     private static UstxVoicePart GenerateVoicePart(
-        UstxVoicePart template, Track track, List<FeatureConfig> features)
+        UstxVoicePart template, Track track, List<FeatureConfig> features, UstxPitchContext context)
     {
         var noteTemplate = template.Notes.First();
         var notes = new List<UstxNote>();
@@ -287,13 +305,14 @@ public static class Ustx
         {
             var lastNote = i > 0 ? track.Notes[i - 1] : null;
             var thisNote = track.Notes[i];
-            notes.Add(GenerateNote(noteTemplate, lastNote, thisNote));
+            var duration = context.Distance(thisNote.TickOn, thisNote.TickOff, $".notes[{i}].duration");
+            notes.Add(GenerateNote(noteTemplate, lastNote, thisNote, duration));
         }
 
         var curves = new List<UstxCurve>();
         if (features.Contains(Feature.ConvertPitch))
         {
-            var points = track.Pitch.ToOpenUtauPitchData(track.Notes);
+            var points = track.Pitch.ToOpenUtauPitchData(track.Notes, context.At(".pitch"));
             if (points.Count > 0)
             {
                 curves.Add(new UstxCurve
@@ -316,10 +335,10 @@ public static class Ustx
         };
     }
 
-    private static UstxNote GenerateNote(UstxNote template, Note? lastNote, Note thisNote)
+    private static UstxNote GenerateNote(UstxNote template, Note? lastNote, Note thisNote, long duration)
     {
         var firstPitchPointValue = lastNote is not null && lastNote.TickOff == thisNote.TickOn
-            ? (lastNote.Key - thisNote.Key) * 10.0
+            ? ((double)lastNote.Key - thisNote.Key) * 10.0
             : 0.0;
 
         var pitchPoints = template.Pitch.Data.Select((d, i) =>
@@ -333,7 +352,7 @@ public static class Ustx
         return new UstxNote
         {
             Position = thisNote.TickOn,
-            Duration = thisNote.Length,
+            Duration = duration,
             Tone = thisNote.Key,
             Lyric = lyric,
             Pitch = new UstxPitch { Data = pitchPoints, SnapFirst = template.Pitch.SnapFirst },

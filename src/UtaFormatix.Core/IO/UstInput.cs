@@ -12,7 +12,7 @@ internal static class UstInput
     private static readonly string[] NoteFields =
         ["Length", "Lyric", "NoteNum", "PBS", "PBW", "PBY", "PBM", "VBR", "Piches", "Pitches", "PitchBend"];
 
-    public static Dictionary<int, long> Validate(string[] lines, string filePath, UstPitchBudget budget)
+    public static Dictionary<int, long> Validate(string[] lines, string filePath, PitchSampleBudget budget)
     {
         var lengths = new Dictionary<int, long>();
         var totalTicks = 0L;
@@ -98,7 +98,7 @@ internal static class UstInput
     public static bool IsSection(string line) =>
         line.StartsWith("[#", StringComparison.Ordinal) && line.EndsWith(']');
 
-    private static void CountPitchCells(string value, bool semicolon, string path, UstPitchBudget budget)
+    private static void CountPitchCells(string value, bool semicolon, string path, PitchSampleBudget budget)
     {
         if (string.IsNullOrWhiteSpace(value)) return;
         var count = 1L;

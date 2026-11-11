@@ -51,25 +51,40 @@ internal static class OpenUtauPitchConversion
     public static PitchModel? PitchFromUstxPart(
         List<Note> notes,
         OpenUtauPartPitchData pitchData,
-        List<Tempo> tempos)
+        TickTimeTransformer time,
+        UstxPitchContext partContext,
+        int curveIndex)
     {
         var notePointsList = new List<List<(long Tick, double Value)>>();
-        var tickTimeTransformer = new TickTimeTransformer(tempos);
         var lastKeyPos = -SafeSamplingIntervalTick;
 
         for (var i = 0; i < Math.Min(notes.Count, pitchData.Notes.Count); i++)
         {
             var note = notes[i];
             var notePitch = pitchData.Notes[i];
+            var noteContext = partContext.At($".notes[{i}]");
+            var pitchContext = noteContext.At(".pitch");
             var points = new List<(long Tick, double Value)>();
             var lastPointShape = OpenUtauNotePitchData.Shape.EaseInOut;
-            var noteStartInMillis = tickTimeTransformer.TickToMilliSec(note.TickOn);
-            var keyPointPositions = new List<long>();
-
-            foreach (var rawPoint in notePitch.Points)
+            var noteStartInMillis = 0.0;
+            if (notePitch.Points.Count > 0)
             {
-                var x = tickTimeTransformer.MilliSecToTick(noteStartInMillis + rawPoint.X);
-                x = Math.Max(x, lastKeyPos + SafeSamplingIntervalTick);
+                noteStartInMillis = pitchContext.Finite(time.TickToMilliSec(note.TickOn), ".data");
+                var nearbyTick = note.TickOn <= long.MaxValue - SamplingIntervalTick
+                    ? note.TickOn + SamplingIntervalTick
+                    : note.TickOn - SamplingIntervalTick;
+                var nearbyTime = pitchContext.Finite(time.TickToMilliSec(nearbyTick), ".data");
+                if (nearbyTime == noteStartInMillis)
+                    throw pitchContext.Range(".data");
+            }
+            var keyPointPositions = new HashSet<long>();
+
+            for (var j = 0; j < notePitch.Points.Count; j++)
+            {
+                var rawPoint = notePitch.Points[j];
+                var field = $".data[{j}].x";
+                var x = pitchContext.Tick(time, noteStartInMillis + rawPoint.X, field);
+                x = Math.Max(x, pitchContext.Add(lastKeyPos, SafeSamplingIntervalTick, field));
                 lastKeyPos = x;
                 keyPointPositions.Add(x);
                 var y = rawPoint.Y / 10.0;
@@ -78,8 +93,7 @@ internal static class OpenUtauPitchConversion
 
                 if (lastPoint is not null && thisPoint.y != lastPoint.Value.Value)
                 {
-                    var interpolated = InterpolatePoints((lastPoint.Value.Tick, lastPoint.Value.Value), (x, y), lastPointShape);
-                    points.AddRange(interpolated.Skip(1));
+                    AppendInterpolated(points, lastPoint.Value, thisPoint, lastPointShape, pitchContext);
                 }
                 else
                 {
@@ -89,17 +103,21 @@ internal static class OpenUtauPitchConversion
                 lastPointShape = rawPoint.Shape;
             }
 
+            var pointCount = points.Count;
             AppendStartAndEndPoint(points, note);
+            pitchContext.Samples(points.Count - pointCount, ".data");
 
             var pointsBefore = points.Where(p => p.Tick < note.TickOn).ToList();
             var pointsIn = points.Where(p => p.Tick >= note.TickOn && p.Tick <= note.TickOff).ToList();
             var pointsAfter = points.Where(p => p.Tick > note.TickOff).ToList();
 
-            var pointsInNoteWithVibrato = pointsIn
-                .AppendUtauNoteVibrato(notePitch.Vibrato, note, tickTimeTransformer, SamplingIntervalTick);
+            var vibrato = notePitch.Vibrato;
+            var pointsInNoteWithVibrato = vibrato.Length > 0 && vibrato.Depth > 0
+                ? pointsIn.AppendUtauNoteVibrato(vibrato, note, time, SamplingIntervalTick, noteContext)
+                : pointsIn;
 
             var pointsWithVibrato = pointsBefore.Concat(pointsInNoteWithVibrato).Concat(pointsAfter).ToList();
-            var pointsResampled = Resampled(pointsWithVibrato, SamplingIntervalTick, keyPointPositions);
+            var pointsResampled = Resampled(pointsWithVibrato, keyPointPositions, pitchContext);
             notePointsList.Add(pointsResampled);
         }
 
@@ -144,7 +162,7 @@ internal static class OpenUtauPitchConversion
                 var adjustedPoints = rawPoints.Select(p =>
                 {
                     var baseY = prevNote is not null && p.Tick < note.TickOn
-                        ? prevNote.Key - note.Key
+                        ? (double)prevNote.Key - note.Key
                         : 0;
                     return (p.Tick, p.Value - baseY);
                 }).ToList();
@@ -159,7 +177,7 @@ internal static class OpenUtauPitchConversion
                 .SelectMany(list => list)
                 .GroupBy(p => p.Tick)
                 .Where(g => g.Key >= sectionBorder && g.Key <= nextSectionBorder)
-                .Select(g => (g.Key, Value: g.Sum(p => p.Value)))
+                .Select(g => (g.Key, Value: partContext.Finite(g.Sum(p => p.Value), ".notes")))
                 .ToList();
 
             allPointsFromNote.AddRange(pointsInSection);
@@ -169,12 +187,14 @@ internal static class OpenUtauPitchConversion
         var curvePoints = pitchData.Points
             .Select(p => (p.X, p.Y / 100.0))
             .ToList();
-        var resampledCurvePoints = ResampledSimple(curvePoints, SamplingIntervalTick);
+        var resampledCurvePoints = curvePoints.Count == 0
+            ? []
+            : Resampled(curvePoints, null, partContext.At($".curves[{curveIndex}]"));
 
         var pitchPoints = allPointsFromNote
             .Concat(resampledCurvePoints)
             .GroupBy(p => p.Tick)
-            .Select(g => (Tick: g.Key, Value: g.Sum(p => p.Value)))
+            .Select(g => (Tick: g.Key, Value: partContext.Finite(g.Sum(p => p.Value), "")))
             .OrderBy(p => p.Tick)
             .Where(p => p.Tick >= 0)
             .ToList();
@@ -186,23 +206,23 @@ internal static class OpenUtauPitchConversion
             IsAbsolute: false);
     }
 
-    public static PitchModel? MergePitchFromUstxParts(PitchModel? first, PitchModel? second)
+    public static PitchModel? MergePitchFromUstxParts(List<PitchModel> parts, UstxPitchContext context)
     {
-        if (first is null) return second;
-        if (second is null) return first;
+        if (parts.Count == 0) return null;
+        if (parts.Count == 1) return parts[0];
 
-        var data = first.Data
-            .Concat(second.Data)
+        var data = parts
+            .SelectMany(pitch => pitch.Data)
             .Where(p => p.Value is not null)
             .Select(p => (p.Tick, p.Value!.Value))
             .GroupBy(p => p.Tick)
-            .Select(g => (Tick: g.Key, Value: g.Sum(p => p.Value)))
+            .Select(g => (Tick: g.Key, Value: context.Finite(g.Sum(p => p.Value), "")))
             .OrderBy(p => p.Tick)
             .ToList();
 
         return new PitchModel(
             data.Select(p => (p.Tick, (double?)p.Value)).ToList(),
-            first.IsAbsolute);
+            IsAbsolute: false);
     }
 
     public static PitchModel? ReduceRepeatedPitchPointsFromUstxTrack(this PitchModel? pitch)
@@ -218,15 +238,27 @@ internal static class OpenUtauPitchConversion
     }
 
     public static List<(long Tick, double Value)> ToOpenUtauPitchData(
-        this PitchModel? pitch, List<Note> notes)
+        this PitchModel? pitch, List<Note> notes, UstxPitchContext context)
     {
-        var data = pitch?.GetRelativeData(notes);
+        if (pitch is null) return [];
+        context.Samples(pitch.Data.Count, "");
+        var data = PitchCalculation.ConvertRelativity(pitch, notes, toAbsolute: false);
         if (data is null || data.Count == 0) return [];
 
-        return data
-            .Select(p => (Tick: p.Tick, Value: RoundToCents(p.Value)))
-            .ToList()
-            .AppendPitchPointsForOpenUtauOutput()
+        var count = data.Count(point => point.Value.HasValue);
+        context.Samples(count, "");
+        var points = new List<(long Tick, double Value)>(count);
+        for (var i = 0; i < data.Count; i++)
+        {
+            var (tick, value) = data[i];
+            if (value is not { } relativePitch) continue;
+            var cents = RoundToCents(relativePitch);
+            if (!double.IsFinite(cents) || cents < int.MinValue || cents > int.MaxValue)
+                throw context.Range($".values[{i}]");
+            points.Add((tick, cents));
+        }
+        return PitchCalculation.AppendPitchPointsForInterpolation(points, SamplingIntervalTick,
+                () => context.Samples(1, ""))
             .ReduceRepeatedPitchPoints();
     }
 
@@ -239,13 +271,18 @@ internal static class OpenUtauPitchConversion
         return cents - rounded == 0.5 ? rounded + 1 : rounded;
     }
 
-    private static List<(long Tick, double Value)> InterpolatePoints(
+    private static void AppendInterpolated(
+        List<(long Tick, double Value)> points,
         (long Tick, double Value) lastPoint,
         (long Tick, double Value) thisPoint,
-        OpenUtauNotePitchData.Shape shape)
+        OpenUtauNotePitchData.Shape shape,
+        UstxPitchContext context)
     {
+        var span = context.Distance(lastPoint.Tick, thisPoint.Tick, "");
+        // Reserve the endpoint and intermediate points before allocating them.
+        context.Samples(span > 0 ? (span - 1) / SamplingIntervalTick + 1 : 1, "");
         var input = new List<(long Tick, double Value)> { lastPoint, thisPoint };
-        return shape switch
+        var interpolated = shape switch
         {
             OpenUtauNotePitchData.Shape.EaseIn => input.InterpolateCosineEaseIn(SamplingIntervalTick),
             OpenUtauNotePitchData.Shape.EaseOut => input.InterpolateCosineEaseOut(SamplingIntervalTick),
@@ -253,6 +290,12 @@ internal static class OpenUtauPitchConversion
             OpenUtauNotePitchData.Shape.Linear => input.InterpolateLinear(SamplingIntervalTick),
             _ => input.InterpolateCosineEaseInOut(SamplingIntervalTick),
         };
+        for (var i = 1; i < interpolated.Count; i++)
+        {
+            var point = interpolated[i];
+            context.Finite(point.Value, "");
+            points.Add(point);
+        }
     }
 
     private static void AppendStartAndEndPoint(List<(long Tick, double Value)> points, Note note)
@@ -321,18 +364,18 @@ internal static class OpenUtauPitchConversion
 
     private static List<(long Tick, double Value)> Resampled(
         List<(long Tick, double Value)> points,
-        long interval,
-        List<long> keyPointPositions)
+        HashSet<long>? keyPointPositions,
+        UstxPitchContext context)
     {
         var result = points
-            .GroupBy(p => p.Tick / interval * interval)
+            .GroupBy(p => p.Tick / SamplingIntervalTick * SamplingIntervalTick)
             .Select(g =>
             {
                 var hasKeyPoint = false;
                 double keyPointValue = 0;
                 foreach (var p in g)
                 {
-                    if (keyPointPositions.Contains(p.Tick))
+                    if (keyPointPositions?.Contains(p.Tick) == true)
                     {
                         hasKeyPoint = true;
                         keyPointValue = p.Value;
@@ -341,7 +384,7 @@ internal static class OpenUtauPitchConversion
                 }
                 return hasKeyPoint
                     ? (Tick: g.Key, Value: keyPointValue)
-                    : (Tick: g.Key, Value: g.Average(p => p.Value));
+                    : (Tick: g.Key, Value: context.Finite(g.Average(p => p.Value), ""));
             })
             .OrderBy(p => p.Tick)
             .ToList();
@@ -352,24 +395,15 @@ internal static class OpenUtauPitchConversion
             var lastPoint = interpolated.Count > 0 ? interpolated[^1] : ((long Tick, double Value)?)null;
             if (lastPoint is null)
             {
+                context.Samples(1, "");
                 interpolated.Add(point);
             }
             else
             {
-                var pair = new List<(long Tick, double Value)> { lastPoint.Value, point };
-                var interp = pair.InterpolateLinear(interval);
-                interpolated.AddRange(interp.Skip(1));
+                AppendInterpolated(interpolated, lastPoint.Value, point, OpenUtauNotePitchData.Shape.Linear, context);
             }
         }
 
         return interpolated;
     }
-
-    private static List<(long Tick, double Value)> ResampledSimple(
-        List<(long Tick, double Value)> points, long interval) =>
-        Resampled(points, interval, []);
-
-    private static List<(long Tick, double Value)> AppendPitchPointsForOpenUtauOutput(
-        this List<(long Tick, double Value)> points) =>
-        PitchCalculation.AppendPitchPointsForInterpolation(points, SamplingIntervalTick);
 }

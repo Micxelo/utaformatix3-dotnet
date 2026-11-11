@@ -20,7 +20,7 @@ var formatOption = new Option<string?>("--output-format", ["-f"])
 
 var simpleImportOption = new Option<bool>("--simple-import")
 {
-    Description = "Simple import (skip pitch conversion; SVP/S5P field validation still applies)",
+    Description = "Simple import (skip pitch conversion; SVP/S5P/USTX field validation still applies)",
 };
 
 var ustImportEncodingOption = new Option<string?>("--ust-import-encoding")
@@ -36,6 +36,10 @@ var ustMaxSamplesOption = new Option<int>("--ust-max-pitch-samples")
 {
     Description = "Maximum UST pitch processing budget (control points, samples and simplification work)",
     DefaultValueFactory = _ => new UstImportOptions().MaxPitchSamples,
+};
+var ustxMaxSamplesOption = new Option<int?>("--ustx-max-pitch-samples")
+{
+    Description = "Maximum USTX pitch processing budget across all tracks (default: 10000000)",
 };
 
 var recoverOption = new Option<bool>("--recover") { Description = "Recover damaged SVP/S5P data with explicit loss diagnostics" };
@@ -98,6 +102,7 @@ var rootCommand = new RootCommand("UtaFormatix — Convert singing voice synthes
     ustImportEncodingOption,
     ustExportEncodingOption,
     ustMaxSamplesOption,
+    ustxMaxSamplesOption,
     recoverOption,
     numericStringsOption,
     maxFileOption,
@@ -127,6 +132,8 @@ rootCommand.SetAction(async (parseResult) =>
     var ustImportEncoding = parseResult.GetValue(ustImportEncodingOption);
     var ustExportEncoding = parseResult.GetValue(ustExportEncodingOption);
     var ustMaxSamples = parseResult.GetValue(ustMaxSamplesOption);
+    var ustxMaxSamples = parseResult.GetValue(ustxMaxSamplesOption);
+    var ustxOptions = ustxMaxSamples is { } maxSamples ? new UstxPitchOptions(maxSamples) : null;
     var defaultLyric = parseResult.GetValue(defaultLyricOption)!;
     var convertPitch = parseResult.GetValue(convertPitchOption);
     var convertPhonemes = parseResult.GetValue(convertPhonemesOption);
@@ -226,7 +233,7 @@ rootCommand.SetAction(async (parseResult) =>
     var importParams = new ImportParams(
         SimpleImport: simpleImport,
         DefaultLyric: defaultLyric) { Svp = svpOptions, S5p = s5pOptions,
-            Ust = new UstImportOptions(ustImportEncoding) { MaxPitchSamples = ustMaxSamples } };
+            Ust = new UstImportOptions(ustImportEncoding) { MaxPitchSamples = ustMaxSamples }, Ustx = ustxOptions };
 
     Project project;
     try
@@ -305,6 +312,11 @@ rootCommand.SetAction(async (parseResult) =>
         Console.Error.WriteLine("Error: --ust-max-pitch-samples requires UST input or output.");
         return 1;
     }
+    if (ustxOptions is not null && inputFormat != Format.Ustx && outputFormat != Format.Ustx)
+    {
+        Console.Error.WriteLine("Error: --ustx-max-pitch-samples requires USTX input or output.");
+        return 1;
+    }
 
     var features = new List<FeatureConfig>();
     if (convertPitch && outputFormat.AvailableFeaturesForGeneration.Contains(Feature.ConvertPitch))
@@ -372,7 +384,7 @@ rootCommand.SetAction(async (parseResult) =>
                         new UstExportOptions(ustExportEncoding ?? "shift_jis") { MaxPitchSamples = ustMaxSamples });
                     break;
                 case nameof(Format.Ustx):
-                    Ustx.GenerateFile(project, temporaryPath, features);
+                    Ustx.GenerateFile(project, temporaryPath, features, ustxOptions);
                     break;
                 case nameof(Format.MusicXml):
                     MusicXml.GenerateFile(project, temporaryPath, features);

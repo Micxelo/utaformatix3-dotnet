@@ -313,7 +313,7 @@ internal static class UtauMode2PitchConversion
         UtauNoteVibratoParams? vibratoParams,
         Note thisNote,
         TickTimeTransformer tickTimeTransformer,
-        long sampleIntervalTick, UstPitchContext? context = null)
+        long sampleIntervalTick, IVibratoPitchContext? context = null)
     {
         if (vibratoParams is null) return points;
 
