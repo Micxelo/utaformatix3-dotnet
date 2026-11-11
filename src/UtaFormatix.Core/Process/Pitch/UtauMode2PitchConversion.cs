@@ -374,15 +374,17 @@ internal static class UtauMode2PitchConversion
 
         var result = new List<(double MilliSec, double Value)>();
 
-        foreach (var inputPoint in millisPoints)
+        for (var i = 0; i < millisPoints.Count; i++)
         {
+            var inputPoint = millisPoints[i];
             var newPoint = (MilliSec: inputPoint.MilliSec, Value: inputPoint.Value + Vibrato(inputPoint.MilliSec));
 
-            if (result.Count > 0)
+            if (i > 0)
             {
-                var lastPoint = result[^1];
-                var pos = lastPoint.MilliSec + sampleIntervalInMillis;
-                if (context is not null && pos <= lastPoint.MilliSec && pos < newPoint.MilliSec)
+                // Use the previous base pitch. The emitted point already includes vibrato.
+                var previousBase = millisPoints[i - 1];
+                var pos = previousBase.MilliSec + sampleIntervalInMillis;
+                if (context is not null && pos <= previousBase.MilliSec && pos < newPoint.MilliSec)
                     throw context.Range("VBR");
                 // Reject enormous ranges before starting a sampling loop. The
                 // per-point check below also handles floating-point endpoints.
@@ -391,7 +393,7 @@ internal static class UtauMode2PitchConversion
                 while (pos < newPoint.MilliSec)
                 {
                     context?.Samples(1, "VBR");
-                    var value = lastPoint.Value + Vibrato(pos);
+                    var value = previousBase.Value + Vibrato(pos);
                     context?.Finite(value, "VBR");
                     result.Add((pos, value));
                     var next = pos + sampleIntervalInMillis;
