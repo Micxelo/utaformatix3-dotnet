@@ -3,6 +3,7 @@ using System.Text.RegularExpressions;
 using YamlDotNet.Core;
 using YamlDotNet.Serialization;
 using YamlDotNet.Serialization.NamingConventions;
+using YamlDotNet.Serialization.NodeDeserializers;
 using YamlDotNet.Serialization.TypeResolvers;
 using UtaFormatix.Core.Models;
 using UtaFormatix.Core.Process;
@@ -25,6 +26,7 @@ public partial class UstxYamlContext : StaticContext
 public static class Ustx
 {
     private const string PitchCurveAbbr = "pitd";
+    private static readonly UstxYamlInteger YamlInteger = new();
 
     private static string LoadTemplate()
     {
@@ -45,6 +47,8 @@ public static class Ustx
         var yamlText = input.ReadText();
         var deserializer = new StaticDeserializerBuilder(new UstxYamlContext())
             .WithNamingConvention(UnderscoredNamingConvention.Instance)
+            .WithNodeTypeResolver(YamlInteger)
+            .WithNodeDeserializer(YamlInteger, location => location.Before<NullNodeDeserializer>())
             .IgnoreUnmatchedProperties()
             .WithDuplicateKeyChecking()
             .Build();

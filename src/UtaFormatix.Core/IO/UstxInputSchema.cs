@@ -86,7 +86,7 @@ internal sealed class UstxInputSchema(IParser parser, UstxInput input) : IParser
         { ["bar_position"] = Scalar(required: true), ["beat_per_bar"] = Scalar(required: true), ["beat_unit"] = Scalar(required: true) },
     };
 
-    private static bool IsNull(YamlDotNet.Core.Events.Scalar scalar) =>
+    internal static bool IsNull(Scalar scalar) =>
         scalar.Tag == "tag:yaml.org,2002:null" ||
         scalar.Tag.IsEmpty && scalar.Style == ScalarStyle.Plain &&
         (scalar.Value.Length == 0 || scalar.Value == "~" || scalar.Value.Equals("null", StringComparison.OrdinalIgnoreCase));
