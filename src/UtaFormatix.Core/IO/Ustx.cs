@@ -174,12 +174,16 @@ public static class Ustx
 
             var partContext = pitchContext.At($".voice_parts[{partIndex}]");
             partContext.Samples(voicePart.Notes.Sum(note => (long)note.Pitch.Data.Count), ".notes");
-            var notePitches = voicePart.Notes.Select(ParseNotePitch).ToList();
-            for (var i = 0; i < notePitches.Count; i++)
+            var notePitches = new List<OpenUtauNotePitchData>(notes.Count);
+            for (var i = 0; i < notes.Count; i++)
             {
-                var tuning = notePitches[i].Tuning;
-                if (tuning != 0)
-                    (tuningByTrack[trackId] ??= [])[notes[i].TickOn] = tuning;
+                var note = voicePart.Notes[i];
+                var previousAdjacentNote = i > 0 && notes[i - 1].TickOff == notes[i].TickOn
+                    ? voicePart.Notes[i - 1]
+                    : null;
+                notePitches.Add(ParseNotePitch(note, previousAdjacentNote));
+                if (note.Tuning != 0)
+                    (tuningByTrack[trackId] ??= [])[notes[i].TickOn] = note.Tuning;
             }
 
             var curveIndex = voicePart.Curves?.FindIndex(c => c.Abbr == PitchCurveAbbr) ?? -1;
@@ -210,10 +214,18 @@ public static class Ustx
         }).ToList();
     }
 
-    private static OpenUtauNotePitchData ParseNotePitch(UstxNote note)
+    private static OpenUtauNotePitchData ParseNotePitch(UstxNote note, UstxNote? previousAdjacentNote)
     {
         var points = note.Pitch.Data.Select(d => new OpenUtauNotePitchData.Point(
             d.X, d.Y, OpenUtauNotePitchData.ParseShape(d.Shape))).ToList();
+        if (note.Pitch.SnapFirst && points.Count > 0)
+        {
+            var firstY = previousAdjacentNote is null
+                ? 0.0
+                : ((double)previousAdjacentNote.Tone - note.Tone) * 10.0 +
+                  ((double)previousAdjacentNote.Tuning - note.Tuning) / 10.0;
+            points[0] = points[0] with { Y = firstY };
+        }
 
         var v = note.Vibrato;
         var vibrato = new UtauNoteVibratoParams(
@@ -455,7 +467,7 @@ public static class Ustx
     public sealed class UstxPitch
     {
         public List<UstxDatum> Data { get; set; } = [];
-        public bool SnapFirst { get; set; }
+        public bool SnapFirst { get; set; } = true;
     }
 
     [YamlSerializable]

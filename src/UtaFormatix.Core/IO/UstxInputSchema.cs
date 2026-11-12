@@ -69,7 +69,7 @@ internal sealed class UstxInputSchema(IParser parser, UstxInput input) : IParser
             ["pitch"] = Map(ObjectKind.Pitch, defaults: true), ["vibrato"] = Map(ObjectKind.Vibrato, defaults: true),
         },
         [ObjectKind.Pitch] = new(StringComparer.Ordinal)
-        { ["data"] = Array(ObjectKind.Point, required: true), ["snap_first"] = Ignore },
+        { ["data"] = Array(ObjectKind.Point, required: true), ["snap_first"] = Scalar() },
         [ObjectKind.Point] = new(StringComparer.Ordinal)
         { ["x"] = Scalar(required: true), ["y"] = Scalar(required: true), ["shape"] = Scalar(nullable: true, defaults: true) },
         [ObjectKind.Vibrato] = new(StringComparer.Ordinal)
