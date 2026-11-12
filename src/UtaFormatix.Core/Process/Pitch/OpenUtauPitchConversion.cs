@@ -5,7 +5,8 @@ namespace UtaFormatix.Core.Process.Pitch;
 
 internal sealed record OpenUtauNotePitchData(
     List<OpenUtauNotePitchData.Point> Points,
-    UtauNoteVibratoParams Vibrato)
+    UtauNoteVibratoParams Vibrato,
+    int Tuning)
 {
     public sealed record Point(double X, double Y, Shape Shape);
 
@@ -108,6 +109,18 @@ internal static class OpenUtauPitchConversion
             pitchContext.Samples(points.Count - pointCount, ".data");
 
             var pointsBefore = points.Where(p => p.Tick < note.TickOn).ToList();
+            var preOnsetTuning = i > 0 && notes[i - 1].TickOff == note.TickOn
+                ? ((double)notePitch.Tuning - pitchData.Notes[i - 1].Tuning) / 100.0
+                : 0.0;
+            // Before an adjacent note starts, its bends are relative to the previous tuned key.
+            if (preOnsetTuning != 0)
+            {
+                for (var j = 0; j < pointsBefore.Count; j++)
+                {
+                    var (tick, value) = pointsBefore[j];
+                    pointsBefore[j] = (tick, value + preOnsetTuning);
+                }
+            }
             var pointsIn = points.Where(p => p.Tick >= note.TickOn && p.Tick <= note.TickOff).ToList();
             var pointsAfter = points.Where(p => p.Tick > note.TickOff).ToList();
 
@@ -223,6 +236,59 @@ internal static class OpenUtauPitchConversion
         return new PitchModel(
             data.Select(p => (p.Tick, (double?)p.Value)).ToList(),
             IsAbsolute: false);
+    }
+
+    public static PitchModel ApplyNoteTuning(PitchModel pitch, List<Note> notes,
+        Dictionary<long, int> tuningByOnset, UstxPitchContext context)
+    {
+        var data = pitch.Data;
+        var result = new List<(long Tick, double? Value)>(data.Count);
+        var index = 0;
+        var tuning = tuningByOnset.GetValueOrDefault(notes[0].TickOn);
+        for (var i = 1; i < notes.Count; i++)
+        {
+            var note = notes[i];
+            var nextTuning = tuningByOnset.GetValueOrDefault(note.TickOn);
+            if (nextTuning == tuning) continue;
+
+            // Match the base-note switch used by relative pitch, including across rests.
+            var previousEnd = notes[i - 1].TickOff;
+            var border = previousEnd + (note.TickOn - previousEnd) / 2;
+            while (index < data.Count && data[index].Tick < border - 1)
+                AppendOriginal();
+
+            // Anchor both sides so interpolation preserves the step between notes.
+            AppendBoundary(border - 1);
+            tuning = nextTuning;
+            AppendBoundary(border);
+        }
+
+        while (index < data.Count)
+            AppendOriginal();
+        return new PitchModel(result, IsAbsolute: false);
+
+        void AppendOriginal()
+        {
+            var (tick, value) = data[index++];
+            result.Add((tick, value + tuning / 100.0));
+        }
+
+        void AppendBoundary(long tick)
+        {
+            if (result.Count > 0 && result[^1].Tick == tick) return;
+            if (index < data.Count && data[index].Tick == tick)
+            {
+                AppendOriginal();
+                return;
+            }
+
+            context.Samples(1, "");
+            var before = data[Math.Max(0, index - 1)];
+            var after = data[Math.Min(index, data.Count - 1)];
+            var ratio = before.Tick == after.Tick ? 0.0 : (double)(tick - before.Tick) / (after.Tick - before.Tick);
+            var value = before.Value.GetValueOrDefault() * (1 - ratio) + after.Value.GetValueOrDefault() * ratio;
+            result.Add((tick, context.Finite(value + tuning / 100.0, "")));
+        }
     }
 
     public static PitchModel? ReduceRepeatedPitchPointsFromUstxTrack(this PitchModel? pitch)

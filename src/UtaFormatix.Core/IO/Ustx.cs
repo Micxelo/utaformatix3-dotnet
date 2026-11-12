@@ -126,6 +126,7 @@ public static class Ustx
     {
         var tracks = new List<Track>(project.Tracks.Count);
         var pitchByTrack = new List<PitchModel>[project.Tracks.Count];
+        var tuningByTrack = new Dictionary<long, int>?[project.Tracks.Count];
         for (var i = 0; i < project.Tracks.Count; i++)
         {
             var t = project.Tracks[i];
@@ -174,6 +175,13 @@ public static class Ustx
             var partContext = pitchContext.At($".voice_parts[{partIndex}]");
             partContext.Samples(voicePart.Notes.Sum(note => (long)note.Pitch.Data.Count), ".notes");
             var notePitches = voicePart.Notes.Select(ParseNotePitch).ToList();
+            for (var i = 0; i < notePitches.Count; i++)
+            {
+                var tuning = notePitches[i].Tuning;
+                if (tuning != 0)
+                    (tuningByTrack[trackId] ??= [])[notes[i].TickOn] = tuning;
+            }
+
             var curveIndex = voicePart.Curves?.FindIndex(c => c.Abbr == PitchCurveAbbr) ?? -1;
             List<OpenUtauPartPitchData.Point> pitchCurve = [];
             if (curveIndex >= 0)
@@ -191,14 +199,15 @@ public static class Ustx
             if (pitch is not null) pitchByTrack[trackId].Add(pitch);
         }
 
-        return tracks
-            .Select(t => new Track(
-                t.Id,
-                t.Name,
-                t.Notes.OrderBy(n => n.TickOn).Select((n, i) => n with { Id = i }).ToList(),
-                OpenUtauPitchConversion.MergePitchFromUstxParts(pitchByTrack[t.Id], pitchContext.At($".tracks[{t.Id}].pitch"))
-                    .ReduceRepeatedPitchPointsFromUstxTrack()))
-            .ToList();
+        return tracks.Select(t =>
+        {
+            var notes = t.Notes.OrderBy(n => n.TickOn).Select((n, i) => n with { Id = i }).ToList();
+            var trackContext = pitchContext.At($".tracks[{t.Id}].pitch");
+            var pitch = OpenUtauPitchConversion.MergePitchFromUstxParts(pitchByTrack[t.Id], trackContext);
+            if (pitch is not null && tuningByTrack[t.Id] is { } tuning)
+                pitch = OpenUtauPitchConversion.ApplyNoteTuning(pitch, notes, tuning, trackContext);
+            return new Track(t.Id, t.Name, notes, pitch.ReduceRepeatedPitchPointsFromUstxTrack());
+        }).ToList();
     }
 
     private static OpenUtauNotePitchData ParseNotePitch(UstxNote note)
@@ -216,7 +225,7 @@ public static class Ustx
             PhaseShift: v.Shift,
             Shift: v.Drift);
 
-        return new OpenUtauNotePitchData(points, vibrato);
+        return new OpenUtauNotePitchData(points, vibrato, note.Tuning);
     }
 
     public static void GenerateFile(Project project, string filePath, IEnumerable<FeatureConfig>? features = null) =>
@@ -435,6 +444,8 @@ public static class Ustx
         public long Position { get; set; }
         public long Duration { get; set; }
         public int Tone { get; set; }
+        [YamlMember(DefaultValuesHandling = DefaultValuesHandling.OmitDefaults)]
+        public int Tuning { get; set; }
         public string Lyric { get; set; } = "";
         public UstxPitch Pitch { get; set; } = new();
         public UstxVibrato Vibrato { get; set; } = new();

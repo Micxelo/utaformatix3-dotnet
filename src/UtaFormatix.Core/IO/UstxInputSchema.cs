@@ -65,7 +65,7 @@ internal sealed class UstxInputSchema(IParser parser, UstxInput input) : IParser
         [ObjectKind.Note] = new(StringComparer.Ordinal)
         {
             ["position"] = Scalar(required: true), ["duration"] = Scalar(required: true),
-            ["tone"] = Scalar(required: true), ["lyric"] = Scalar(required: true),
+            ["tone"] = Scalar(required: true), ["lyric"] = Scalar(required: true), ["tuning"] = Scalar(),
             ["pitch"] = Map(ObjectKind.Pitch, defaults: true), ["vibrato"] = Map(ObjectKind.Vibrato, defaults: true),
         },
         [ObjectKind.Pitch] = new(StringComparer.Ordinal)
