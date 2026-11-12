@@ -16,6 +16,7 @@ internal sealed record OpenUtauNotePitchData(
         EaseOut,
         EaseInOut,
         Linear,
+        Spline,
     }
 
     public static Shape ParseShape(string? textValue) => textValue switch
@@ -24,6 +25,7 @@ internal sealed record OpenUtauNotePitchData(
         "o" => Shape.EaseOut,
         "io" => Shape.EaseInOut,
         "l" => Shape.Linear,
+        "sp" => Shape.Spline,
         _ => Shape.EaseInOut,
     };
 
@@ -33,6 +35,7 @@ internal sealed record OpenUtauNotePitchData(
         Shape.EaseOut => "o",
         Shape.EaseInOut => "io",
         Shape.Linear => "l",
+        Shape.Spline => "sp",
         _ => "io",
     };
 }
@@ -65,8 +68,7 @@ internal static class OpenUtauPitchConversion
             var notePitch = pitchData.Notes[i];
             var noteContext = partContext.At($".notes[{i}]");
             var pitchContext = noteContext.At(".pitch");
-            var points = new List<(long Tick, double Value)>();
-            var lastPointShape = OpenUtauNotePitchData.Shape.EaseInOut;
+            var controls = new List<(long Tick, double Value)>(notePitch.Points.Count);
             var noteStartInMillis = 0.0;
             if (notePitch.Points.Count > 0)
             {
@@ -88,24 +90,38 @@ internal static class OpenUtauPitchConversion
                 x = Math.Max(x, pitchContext.Add(lastKeyPos, SafeSamplingIntervalTick, field));
                 lastKeyPos = x;
                 keyPointPositions.Add(x);
-                var y = rawPoint.Y / 10.0;
-                var thisPoint = (x, y);
-                var lastPoint = points.Count > 0 ? points[^1] : ((long Tick, double Value)?)null;
+                controls.Add((x, rawPoint.Y / 10.0));
+            }
 
-                if (lastPoint is not null && thisPoint.y != lastPoint.Value.Value)
+            var points = new List<(long Tick, double Value)>();
+            var hasSpline = notePitch.Points.Any(point => point.Shape == OpenUtauNotePitchData.Shape.Spline);
+            if (controls.Count > 0)
+                points.Add(controls[0]);
+            for (var j = 1; j < controls.Count; j++)
+            {
+                var start = controls[j - 1];
+                var end = controls[j];
+                var shape = notePitch.Points[j - 1].Shape;
+                if (shape == OpenUtauNotePitchData.Shape.Spline && controls.Count > 2)
                 {
-                    AppendInterpolated(points, lastPoint.Value, thisPoint, lastPointShape, pitchContext);
+                    // OpenUtau uses held boundary values as neighbors when it extends a curve.
+                    var before = j > 1 ? controls[j - 2] : (Math.Min(note.TickOn, start.Tick), start.Value);
+                    var after = j + 1 < controls.Count ? controls[j + 1] : (Math.Max(note.TickOff, end.Tick), end.Value);
+                    AppendSpline(points, before, start, end, after, pitchContext.At($".data[{j - 1}]"));
+                }
+                else if (start.Value != end.Value)
+                {
+                    // Two-control-point splines use the regular ease-in-out curve.
+                    AppendInterpolated(points, start, end, shape, pitchContext);
                 }
                 else
                 {
-                    points.Add(thisPoint);
+                    points.Add(end);
                 }
-
-                lastPointShape = rawPoint.Shape;
             }
 
             var pointCount = points.Count;
-            AppendStartAndEndPoint(points, note);
+            AppendStartAndEndPoint(points, note, holdLastValue: hasSpline);
             pitchContext.Samples(points.Count - pointCount, ".data");
 
             var pointsBefore = points.Where(p => p.Tick < note.TickOn).ToList();
@@ -384,7 +400,42 @@ internal static class OpenUtauPitchConversion
         }
     }
 
-    private static void AppendStartAndEndPoint(List<(long Tick, double Value)> points, Note note)
+    private static void AppendSpline(
+        List<(long Tick, double Value)> points,
+        (long Tick, double Value) before,
+        (long Tick, double Value) start,
+        (long Tick, double Value) end,
+        (long Tick, double Value) after,
+        UstxPitchContext context)
+    {
+        if (before.Value == start.Value && start.Value == end.Value && end.Value == after.Value)
+        {
+            points.Add(end);
+            return;
+        }
+
+        var span = context.Distance(start.Tick, end.Tick, "");
+        context.Samples((span - 1) / SamplingIntervalTick + 1, "");
+        var leftScale = (double)span / context.Distance(before.Tick, end.Tick, "");
+        var rightScale = (double)span / context.Distance(start.Tick, after.Tick, "");
+        for (var tick = start.Tick; end.Tick - tick > SamplingIntervalTick;)
+        {
+            tick += SamplingIntervalTick;
+            var t = (double)(tick - start.Tick) / span;
+            var u = 1 - t;
+            // Cubic Hermite basis with Catmull–Rom tangents scaled by the tick spans.
+            var left = t * u * u * leftScale;
+            var right = t * t * u * rightScale;
+            var value = ((1 + 2 * t) * u * u + right) * start.Value +
+                        ((1 + 2 * u) * t * t + left) * end.Value -
+                        left * before.Value - right * after.Value;
+            points.Add((tick, context.Finite(value, "")));
+        }
+
+        points.Add(end);
+    }
+
+    private static void AppendStartAndEndPoint(List<(long Tick, double Value)> points, Note note, bool holdLastValue)
     {
         var start = note.TickOn;
         var end = note.TickOff;
@@ -402,6 +453,7 @@ internal static class OpenUtauPitchConversion
 
         var firstTick = points[0].Tick;
         var lastTick = points[^1].Tick;
+        var tailValue = holdLastValue ? points[^1].Value : 0.0;
 
         if (!hasStartPoint)
         {
@@ -411,7 +463,7 @@ internal static class OpenUtauPitchConversion
             }
             else if (lastTick < start)
             {
-                points.Add((start, 0.0));
+                points.Add((start, tailValue));
             }
             else
             {
@@ -433,7 +485,10 @@ internal static class OpenUtauPitchConversion
             }
             else if (points[^1].Tick < end)
             {
-                points.Add((end, 0.0));
+                // A held tail ends before the next note can begin at TickOff.
+                var tailTick = holdLastValue ? end - 1 : end;
+                if (points[^1].Tick < tailTick)
+                    points.Add((tailTick, tailValue));
             }
             else
             {

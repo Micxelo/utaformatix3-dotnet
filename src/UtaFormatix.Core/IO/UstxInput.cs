@@ -104,7 +104,7 @@ internal sealed class UstxInput(string filePath, List<ImportWarning> warnings)
                     var point = points[di]; var where = at + $".pitch.data[{di}]";
                     Finite(point.X, where + ".x"); Finite(point.Y, where + ".y");
                     point.Shape ??= "io";
-                    if (point.Shape is not ("i" or "o" or "io" or "l"))
+                    if (point.Shape is not ("i" or "o" or "io" or "l" or "sp"))
                         throw Error("USTX_PITCH", where + ".shape", "Unknown pitch interpolation shape; an intended curve cannot be inferred.");
                 }
                 if (points.Zip(points.Skip(1), (a, b) => a.X > b.X).Any(v => v))
