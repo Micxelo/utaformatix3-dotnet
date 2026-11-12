@@ -213,26 +213,84 @@ internal static class OpenUtauPitchConversion
             sectionBorder = nextSectionBorder;
         }
 
-        var curvePoints = pitchData.Points
-            .Select(p => (p.X, p.Y / 100.0))
-            .ToList();
-        var resampledCurvePoints = curvePoints.Count == 0
-            ? []
-            : Resampled(curvePoints, null, partContext.At($".curves[{curveIndex}]"));
-
-        var pitchPoints = allPointsFromNote
-            .Concat(resampledCurvePoints)
+        var notePoints = allPointsFromNote
             .GroupBy(p => p.Tick)
             .Select(g => (Tick: g.Key, Value: partContext.Finite(g.Sum(p => p.Value), "")))
             .OrderBy(p => p.Tick)
-            .Where(p => p.Tick >= 0)
             .ToList();
+        var pitchPoints = pitchData.Points.Count == 0 ? notePoints
+            : AddPitd(notePoints, ResamplePitd(pitchData.Points, partContext.At($".curves[{curveIndex}]")), partContext);
+        var nonnegativePoints = pitchPoints.Where(p => p.Tick >= 0)
+            .Select(p => (p.Tick, (double?)p.Value)).ToList();
 
-        if (pitchPoints.Count == 0) return null;
+        return nonnegativePoints.Count == 0 ? null : new PitchModel(nonnegativePoints, IsAbsolute: false);
+    }
 
-        return new PitchModel(
-            pitchPoints.Select(p => (p.Tick, (double?)p.Value)).ToList(),
-            IsAbsolute: false);
+    private static List<(long Tick, double Value)> ResamplePitd(
+        List<OpenUtauPartPitchData.Point> controls, UstxPitchContext context)
+    {
+        context.Samples(1, "");
+        var start = controls[0];
+        var result = new List<(long Tick, double Value)> { (start.X, start.Y / 100.0) };
+        for (var i = 1; i < controls.Count; i++)
+        {
+            var end = controls[i];
+            if (end.X == start.X) continue; // The input validator has rejected conflicting values.
+
+            var span = context.Distance(start.X, end.X, "");
+            var remainder = start.X % SamplingIntervalTick;
+            var step = remainder < 0 ? -remainder : SamplingIntervalTick - remainder;
+            var intermediateCount = span > step ? (span - step - 1) / SamplingIntervalTick + 1 : 0;
+            context.Samples(intermediateCount + 1, "");
+
+            var from = start.Y / 100.0;
+            var to = end.Y / 100.0;
+            // Keep both original endpoints and sample the interior on the regular grid.
+            for (var j = 0L; j < intermediateCount; j++)
+            {
+                var offset = step + j * SamplingIntervalTick;
+                result.Add((start.X + offset, from + offset * (to - from) / span));
+            }
+            result.Add((end.X, to));
+            start = end;
+        }
+        return result;
+    }
+
+    private static List<(long Tick, double Value)> AddPitd(
+        List<(long Tick, double Value)> notePoints,
+        List<(long Tick, double Value)> deviations,
+        UstxPitchContext context)
+    {
+        if (notePoints.Count == 0) return deviations;
+        var result = new List<(long Tick, double Value)>(Math.Max(notePoints.Count, deviations.Count));
+        var index = 0;
+        foreach (var (tick, deviation) in deviations)
+        {
+            while (index < notePoints.Count && notePoints[index].Tick < tick)
+                result.Add(notePoints[index++]);
+
+            var bend = 0.0;
+            if (index < notePoints.Count && notePoints[index].Tick == tick)
+            {
+                bend = notePoints[index++].Value;
+            }
+            else if (index > 0 && index < notePoints.Count)
+            {
+                var before = notePoints[index - 1];
+                var after = notePoints[index];
+                var span = after.Tick - before.Tick;
+                // Interpolate the bend at an off-grid PITD point, without bridging rests.
+                if (span <= SamplingIntervalTick)
+                {
+                    var phase = (double)(tick - before.Tick) / span;
+                    bend = (1 - phase) * before.Value + phase * after.Value;
+                }
+            }
+            result.Add((tick, context.Finite(bend + deviation, "")));
+        }
+        result.AddRange(notePoints.Skip(index));
+        return result;
     }
 
     public static PitchModel? MergePitchFromUstxParts(List<PitchModel> parts, UstxPitchContext context)
@@ -327,14 +385,24 @@ internal static class OpenUtauPitchConversion
 
         // Distinct input values are ambiguous even if they round to the same cent.
         var valuesByTick = new Dictionary<long, double>();
+        var isOrdered = true;
         for (var i = 0; i < pitch.Data.Count; i++)
         {
             var (tick, value) = pitch.Data[i];
+            if (i > 0 && tick < pitch.Data[i - 1].Tick) isOrdered = false;
             if (value is { } definedValue &&
                 !valuesByTick.TryAdd(tick, definedValue) && valuesByTick[tick] != definedValue)
                 throw context.ConflictingPitch($".values[{i}]", tick);
         }
 
+        // Both the base-note cursor and the emitted PITD curve require chronological points.
+        int[]? inputIndices = null;
+        if (!isOrdered)
+        {
+            var source = pitch.Data;
+            inputIndices = Enumerable.Range(0, source.Count).OrderBy(i => source[i].Tick).ToArray();
+            pitch = pitch with { Data = inputIndices.Select(i => source[i]).ToList() };
+        }
         var data = PitchCalculation.ConvertRelativity(pitch, notes, toAbsolute: false);
         if (data is null || data.Count == 0) return [];
 
@@ -345,23 +413,22 @@ internal static class OpenUtauPitchConversion
         {
             var (tick, value) = data[i];
             if (value is not { } relativePitch) continue;
+            var inputIndex = inputIndices?[i] ?? i;
+            context.OutputTick(tick, $".ticks[{inputIndex}]");
             var cents = RoundToCents(relativePitch);
             if (!double.IsFinite(cents) || cents < int.MinValue || cents > int.MaxValue)
-                throw context.Range($".values[{i}]");
+                throw context.Range($".values[{inputIndex}]");
+            if (points.Count > 0 && points[^1].Tick == tick)
+            {
+                if (points[^1].Value != cents)
+                    throw context.ConflictingPitch($".values[{inputIndex}]", tick);
+                continue;
+            }
             points.Add((tick, cents));
         }
-        var curve = PitchCalculation.AppendPitchPointsForInterpolation(points, SamplingIntervalTick,
+        return PitchCalculation.AppendPitchPointsForInterpolation(points, SamplingIntervalTick,
                 () => context.Samples(1, ""))
             .ReduceRepeatedPitchPoints();
-
-        // Hold points can collide with other points when the input is out of order.
-        valuesByTick.Clear();
-        foreach (var (tick, cents) in curve)
-        {
-            if (!valuesByTick.TryAdd(tick, cents) && valuesByTick[tick] != cents)
-                throw context.ConflictingPitch("", tick);
-        }
-        return curve;
     }
 
     private static double RoundToCents(double pitch)
@@ -505,7 +572,7 @@ internal static class OpenUtauPitchConversion
 
     private static List<(long Tick, double Value)> Resampled(
         List<(long Tick, double Value)> points,
-        HashSet<long>? keyPointPositions,
+        HashSet<long> keyPointPositions,
         UstxPitchContext context)
     {
         var result = points
@@ -516,7 +583,7 @@ internal static class OpenUtauPitchConversion
                 double keyPointValue = 0;
                 foreach (var p in g)
                 {
-                    if (keyPointPositions?.Contains(p.Tick) == true)
+                    if (keyPointPositions.Contains(p.Tick))
                     {
                         hasKeyPoint = true;
                         keyPointValue = p.Value;

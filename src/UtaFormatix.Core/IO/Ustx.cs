@@ -299,7 +299,11 @@ public static class Ustx
             Bpm = project.Tempos.First().Bpm,
             BeatPerBar = project.TimeSignatures.First().Numerator,
             BeatUnit = project.TimeSignatures.First().Denominator,
-            Tempos = project.Tempos.Select(t => new UstxTempo { Position = t.TickPosition, Bpm = t.Bpm }).ToList(),
+            Tempos = project.Tempos.Select((t, i) => new UstxTempo
+            {
+                Position = pitchContext.OutputTick(t.TickPosition, $".tempos[{i}].position"),
+                Bpm = t.Bpm,
+            }).ToList(),
             TimeSignatures = project.TimeSignatures.Select(ts => new UstxTimeSignature
             {
                 BarPosition = ts.MeasurePosition,
@@ -330,7 +334,10 @@ public static class Ustx
         {
             var lastNote = i > 0 ? track.Notes[i - 1] : null;
             var thisNote = track.Notes[i];
-            var duration = context.Distance(thisNote.TickOn, thisNote.TickOff, $".notes[{i}].duration");
+            var noteContext = context.At($".notes[{i}]");
+            noteContext.OutputTick(thisNote.TickOn, ".position");
+            var duration = noteContext.OutputTick(noteContext.Distance(thisNote.TickOn, thisNote.TickOff, ".duration"), ".duration");
+            noteContext.OutputTick(thisNote.TickOff, ".end");
             notes.Add(GenerateNote(noteTemplate, lastNote, thisNote, duration));
         }
 

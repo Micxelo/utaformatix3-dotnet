@@ -41,6 +41,14 @@ internal sealed class UstxPitchContext
     public ProjectInputException ConflictingPitch(string field, long tick) =>
         new("USTX_DUPLICATE", Location(field), $"Conflicting pitch values at tick {tick}.");
 
+    public int OutputTick(long tick, string field)
+    {
+        if (tick is < int.MinValue or > int.MaxValue)
+            throw new ProjectInputException("USTX_RANGE", Location(field),
+                $"Tick {tick} is outside the OpenUtau Int32 range.");
+        return (int)tick;
+    }
+
     public double Finite(double value, string field)
     {
         if (!double.IsFinite(value)) throw Range(field);
