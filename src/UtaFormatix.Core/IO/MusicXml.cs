@@ -121,8 +121,26 @@ public static class MusicXml
             var measureNode = measureNodes[index];
             var tickPosition = masterTrackResult.MeasureBorders[index];
 
+            var noteIndex = 0;
             foreach (var noteNode in measureNode.Elements("note"))
             {
+                var path = $"$.part[{trackIndex}].measure[{index}].note[{noteIndex++}]";
+                var isRest = noteNode.Element("rest") is not null;
+                var key = 0;
+                if (!isRest)
+                {
+                    var pitchNode = noteNode.Element("pitch");
+                    if (pitchNode is null)
+                    {
+                        if (noteNode.Element("unpitched") is not null)
+                            throw new ProjectInputException("MUSICXML_UNSUPPORTED", path + ".unpitched",
+                                "Unpitched notes cannot be represented as CeVIO singing notes.");
+                        throw new ProjectInputException("MUSICXML_REQUIRED", path + ".pitch",
+                            "A non-rest note must contain pitch information.");
+                    }
+                    key = ParsePitch(pitchNode, path + ".pitch");
+                }
+
                 var durationEl = noteNode.Element("duration");
                 long duration;
                 if (durationEl is not null && long.TryParse(durationEl.Value, out var parsed))
@@ -138,14 +156,11 @@ public static class MusicXml
                     throw new IllegalFileException.XmlElementNotFound("duration");
                 }
 
-                if (noteNode.Elements("rest").Any())
+                if (isRest)
                 {
                     tickPosition += duration;
                     continue;
                 }
-
-                var pitchNode = noteNode.Element("pitch");
-                var key = pitchNode is not null ? ParsePitch(pitchNode) : Constants.DefaultKey;
 
                 var lyric = noteNode.Element("lyric")?.Element("text")?.Value;
                 if (string.IsNullOrEmpty(lyric))
@@ -177,9 +192,14 @@ public static class MusicXml
         return new Track(trackIndex, trackName, notes, null);
     }
 
-    private static int ParsePitch(XElement pitchNode)
+    private static int ParsePitch(XElement pitchNode, string path)
     {
-        var step = pitchNode.Element("step")!.Value;
+        var step = pitchNode.Element("step")?.Value;
+        if (string.IsNullOrWhiteSpace(step))
+            throw new ProjectInputException("MUSICXML_REQUIRED", path + ".step", "A pitch step is required.");
+        var octaveText = pitchNode.Element("octave")?.Value;
+        if (string.IsNullOrWhiteSpace(octaveText))
+            throw new ProjectInputException("MUSICXML_REQUIRED", path + ".octave", "A pitch octave is required.");
         var alterEl = pitchNode.Element("alter");
         var alter = alterEl is not null ? int.Parse(alterEl.Value) : 0;
         var relativeKey = step switch
@@ -193,12 +213,20 @@ public static class MusicXml
             "B" => 11,
             _ => throw new InvalidOperationException(),
         } + alter;
-        var octave = int.Parse(pitchNode.Element("octave")!.Value) + 1;
+        var octave = int.Parse(octaveText) + 1;
         return octave * Constants.KeyInOctave + relativeKey;
     }
 
     public static void GenerateFile(Project project, string filePath, IEnumerable<FeatureConfig>? features = null)
     {
+        for (var i = 0; i < project.Tempos.Count; i++)
+        {
+            var bpm = project.Tempos[i].Bpm;
+            if (!double.IsFinite(bpm) || bpm < 0)
+                throw new ProjectInputException("MUSICXML_TEMPO", $"$.tempos[{i}].bpm",
+                    "BPM must be finite and non-negative.");
+        }
+
         var projectWithTickRateApplied = ApplyTickRate(project);
         using var archive = ZipFile.Open(filePath, ZipArchiveMode.Create);
         foreach (var track in projectWithTickRateApplied.Tracks)
