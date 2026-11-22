@@ -167,16 +167,11 @@ public static class MusicXml
                 tickPosition += duration;
                 notes.Add(note);
 
-                var tieType = noteNode.Element("tie")?.Attribute("type")?.Value;
-                switch (tieType)
-                {
-                    case "start":
-                        isInsideNote = true;
-                        break;
-                    case "stop":
-                        isInsideNote = false;
-                        break;
-                }
+                var ties = noteNode.Elements("tie");
+                if (ties.Any(tie => (string?)tie.Attribute("type") == "start"))
+                    isInsideNote = true;
+                else if (ties.Any(tie => (string?)tie.Attribute("type") == "stop"))
+                    isInsideNote = false;
             }
         }
 
@@ -331,18 +326,20 @@ public static class MusicXml
             pitchEl,
             new XElement("duration", note.Duration));
 
-        var tieType = note.Type switch
+        string[] tieTypes = note.Type switch
         {
-            MXmlMeasureContent.NoteType.Begin => "start",
-            MXmlMeasureContent.NoteType.End => "stop",
-            _ => (string?)null,
+            MXmlMeasureContent.NoteType.Begin => ["start"],
+            MXmlMeasureContent.NoteType.Middle => ["stop", "start"],
+            MXmlMeasureContent.NoteType.End => ["stop"],
+            _ => [],
         };
 
-        if (tieType is not null)
-        {
+        foreach (var tieType in tieTypes)
             noteEl.Add(new XElement("tie", new XAttribute("type", tieType)));
+        if (tieTypes.Length > 0)
+        {
             noteEl.Add(new XElement("notations",
-                new XElement("tied", new XAttribute("type", tieType))));
+                tieTypes.Select(tieType => new XElement("tied", new XAttribute("type", tieType)))));
         }
 
         var syllabic = note.Type switch
@@ -453,19 +450,15 @@ public static class MusicXml
                 switch (keyTick)
                 {
                     case KeyTick.WithTempo tempoTick:
-                        if (ongoingNoteWithCurrentHead is null)
+                        if (ongoingNoteWithCurrentHead is { } ongoing && keyTick.Tick > ongoing.Head)
                         {
-                            currentContentGroup.Add(new MXmlMeasureContent.Tempo(tempoTick.TempoModel.Bpm));
-                        }
-                        else
-                        {
-                            var (noteModel, head) = ongoingNoteWithCurrentHead.Value;
+                            var (noteModel, head) = ongoing;
                             currentContentGroup.Add(new MXmlMeasureContent.Note(
                                 keyTick.Tick - head, noteModel,
                                 noteModel.TickOn == head ? MXmlMeasureContent.NoteType.Begin : MXmlMeasureContent.NoteType.Middle));
                             ongoingNoteWithCurrentHead = (noteModel, keyTick.Tick);
-                            currentContentGroup.Add(new MXmlMeasureContent.Tempo(tempoTick.TempoModel.Bpm));
                         }
+                        currentContentGroup.Add(new MXmlMeasureContent.Tempo(tempoTick.TempoModel.Bpm));
                         break;
                     case KeyTick.WithNoteStart noteStart:
                         ongoingNoteWithCurrentHead = (noteStart.NoteModel, keyTick.Tick);
