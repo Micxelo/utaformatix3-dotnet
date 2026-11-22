@@ -32,11 +32,11 @@ public static class MusicXml
         var masterTrack = partNodes.FirstOrDefault(p => p.Elements("measure").Any())
             ?? throw new IllegalFileException.XmlElementNotFound("measure");
 
-        var masterTrackResult = ParseMasterTrack(masterTrack, warnings);
+        var masterTrackResult = ParseMasterTrack(masterTrack, partNodes.IndexOf(masterTrack), warnings);
         var timeSignatures = masterTrackResult.TimeSignatures.Count > 0
             ? masterTrackResult.TimeSignatures
             : [new TimeSignature(0, Constants.DefaultMeterHigh, Constants.DefaultMeterLow)];
-        var tempos = masterTrackResult.TempoWithMeasureIndexes.Select(t => t.Tempo).ToList();
+        var tempos = masterTrackResult.Tempos;
         if (tempos.Count == 0)
             tempos = [new Tempo(0, Constants.DefaultBpm)];
 
@@ -54,7 +54,7 @@ public static class MusicXml
             ImportWarnings: warnings);
     }
 
-    private static MasterTrackParseResult ParseMasterTrack(XElement partNode, List<ImportWarning> warnings)
+    private static MasterTrackParseResult ParseMasterTrack(XElement partNode, int partIndex, List<ImportWarning> warnings)
     {
         var measureNodes = partNode.Elements("measure").ToList();
         var divisions = measureNodes.First()
@@ -65,7 +65,6 @@ public static class MusicXml
         var divisionsLong = long.Parse(divisions);
         var importTickRate = (double)Constants.TicksInBeat / divisionsLong;
 
-        var tempos = new List<(int MeasureIndex, Tempo Tempo)>();
         var timeSignatures = new List<TimeSignature>();
         var measureBorders = new List<long> { 0 };
         var tickPosition = 0L;
@@ -89,22 +88,20 @@ public static class MusicXml
                 currentTimeSignature = ts;
             }
 
-            var soundNode = measureNode.Elements("sound")
-                .FirstOrDefault(s => s.Attribute("tempo") is not null);
-            if (soundNode is not null)
-            {
-                var tempo = new Tempo(tickPosition, double.Parse(soundNode.Attribute("tempo")!.Value));
-                tempos.Add((index, tempo));
-            }
-
             tickPosition += (long)Constants.TicksInFullNote * currentTimeSignature.Numerator / currentTimeSignature.Denominator;
             measureBorders.Add(tickPosition);
         }
 
+        var tempos = MusicXmlTempo.Parse(measureNodes, measureBorders, partIndex);
         if (timeSignatures.Count == 0)
             warnings.Add(new ImportWarning.TimeSignatureNotFound());
         if (tempos.Count == 0)
             warnings.Add(new ImportWarning.TempoNotFound());
+        else if (tempos[0].TickPosition > 0)
+        {
+            warnings.Add(new ImportWarning.DefaultTempoInserted(tempos[0].TickPosition));
+            tempos.Insert(0, new Tempo(0, Constants.DefaultBpm));
+        }
 
         return new MasterTrackParseResult(tempos, timeSignatures, importTickRate, measureBorders);
     }
@@ -514,7 +511,7 @@ public static class MusicXml
     #region Data Models
 
     private sealed record MasterTrackParseResult(
-        List<(int MeasureIndex, Tempo Tempo)> TempoWithMeasureIndexes,
+        List<Tempo> Tempos,
         List<TimeSignature> TimeSignatures,
         double ImportTickRate,
         List<long> MeasureBorders);
