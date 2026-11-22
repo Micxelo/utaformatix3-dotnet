@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.IO.Compression;
+using System.Xml;
 using System.Xml.Linq;
 using UtaFormatix.Core.Exceptions;
 using UtaFormatix.Core.Models;
@@ -24,7 +25,7 @@ public static class MusicXml
     {
         var projectName = Path.GetFileNameWithoutExtension(filePath);
         var text = File.ReadAllText(filePath);
-        var doc = XDocument.Parse(text);
+        var doc = XDocument.Parse(text, LoadOptions.PreserveWhitespace);
 
         var root = doc.Root ?? throw new IllegalFileException.XmlRootNotFound();
         var partNodes = root.Elements("part").ToList();
@@ -147,7 +148,9 @@ public static class MusicXml
                 var pitchNode = noteNode.Element("pitch");
                 var key = pitchNode is not null ? ParsePitch(pitchNode) : Constants.DefaultKey;
 
-                var lyric = noteNode.Element("lyric")?.Element("text")?.Value ?? defaultLyric;
+                var lyric = noteNode.Element("lyric")?.Element("text")?.Value;
+                if (string.IsNullOrEmpty(lyric))
+                    lyric = defaultLyric;
 
                 Note note;
                 if (!isInsideNote)
@@ -211,7 +214,12 @@ public static class MusicXml
             var entryName = $"{project.Name}_{track.Id + 1}_{trackNameSafe}.{Format.MusicXml.Extension}";
             var entry = archive.CreateEntry(entryName);
             using var writer = new StreamWriter(entry.Open());
-            document.Save(writer);
+            using var xmlWriter = XmlWriter.Create(writer, new XmlWriterSettings
+            {
+                Indent = true,
+                NewLineHandling = NewLineHandling.Entitize,
+            });
+            document.Save(xmlWriter);
         }
     }
 
