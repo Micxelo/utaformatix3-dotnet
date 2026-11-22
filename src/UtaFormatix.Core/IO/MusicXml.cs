@@ -24,8 +24,7 @@ public static class MusicXml
     public static Project Parse(string filePath, ImportParams? importParams = null)
     {
         var projectName = Path.GetFileNameWithoutExtension(filePath);
-        var text = File.ReadAllText(filePath);
-        var doc = XDocument.Parse(text, LoadOptions.PreserveWhitespace);
+        var doc = MusicXmlEncoding.ReadDocument(filePath);
 
         var root = doc.Root ?? throw new IllegalFileException.XmlRootNotFound();
         var partNodes = root.Elements("part").ToList();
@@ -208,7 +207,7 @@ public static class MusicXml
             var trackNameSafe = GetSafeFileName(track.Name);
             var entryName = $"{project.Name}_{track.Id + 1}_{trackNameSafe}.{Format.MusicXml.Extension}";
             var entry = archive.CreateEntry(entryName);
-            using var writer = new StreamWriter(entry.Open());
+            using var writer = new StreamWriter(entry.Open(), MusicXmlEncoding.OutputEncoding);
             using var xmlWriter = XmlWriter.Create(writer, new XmlWriterSettings
             {
                 Indent = true,
