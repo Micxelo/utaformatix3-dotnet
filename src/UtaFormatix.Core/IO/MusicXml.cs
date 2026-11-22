@@ -9,7 +9,7 @@ namespace UtaFormatix.Core.IO;
 
 public static class MusicXml
 {
-    private const double DefaultTickRateCevio = 2.0;
+    private const int DefaultTickRateCevio = 2;
 
     private static string LoadTemplate()
     {
@@ -63,8 +63,7 @@ public static class MusicXml
             .SelectMany(a => a.Elements("divisions"))
             .First()
             .Value;
-        var divisionsLong = long.Parse(divisions);
-        var importTickRate = (double)Constants.TicksInBeat / divisionsLong;
+        var divisionsLong = MusicXmlNumbers.PositiveInt64(divisions, $"$.part[{partIndex}].measure[0].attributes.divisions");
 
         var timeSignatures = new List<TimeSignature>();
         var measureBorders = new List<long> { 0 };
@@ -81,15 +80,19 @@ public static class MusicXml
 
             if (timeNode is not null)
             {
+                var timePath = $"$.part[{partIndex}].measure[{index}].attributes.time";
                 var ts = new TimeSignature(
                     index,
-                    int.Parse(timeNode.Element("beats")!.Value),
-                    int.Parse(timeNode.Element("beat-type")!.Value));
+                    MusicXmlNumbers.Int32(timeNode.Element("beats")!.Value, timePath + ".beats"),
+                    MusicXmlNumbers.Int32(timeNode.Element("beat-type")!.Value, timePath + ".beat-type"));
                 timeSignatures.Add(ts);
                 currentTimeSignature = ts;
             }
 
-            tickPosition += (long)Constants.TicksInFullNote * currentTimeSignature.Numerator / currentTimeSignature.Denominator;
+            var length = MusicXmlNumbers.MeasureLength(currentTimeSignature.Numerator, currentTimeSignature.Denominator,
+                Constants.TicksInFullNote, $"$.part[{partIndex}].measure[{index}].attributes.time");
+            tickPosition = MusicXmlNumbers.Position((Int128)tickPosition + length,
+                $"$.part[{partIndex}].measure[{index}]");
             measureBorders.Add(tickPosition);
         }
 
@@ -104,7 +107,7 @@ public static class MusicXml
             tempos.Insert(0, new Tempo(0, Constants.DefaultBpm));
         }
 
-        return new MasterTrackParseResult(tempos, timeSignatures, importTickRate, measureBorders);
+        return new MasterTrackParseResult(tempos, timeSignatures, divisionsLong, measureBorders);
     }
 
     private static Track ParseTrack(
@@ -113,13 +116,14 @@ public static class MusicXml
         var trackName = $"Track {trackIndex + 1}";
         var notes = new List<Note>();
         var isInsideNote = false;
-        var importTickRate = masterTrackResult.ImportTickRate;
+        var divisions = masterTrackResult.Divisions;
         var measureNodes = partNode.Elements("measure").ToList();
 
         for (var index = 0; index < measureNodes.Count; index++)
         {
             var measureNode = measureNodes[index];
             var tickPosition = masterTrackResult.MeasureBorders[index];
+            Int128 cursorUnits = 0;
 
             var noteIndex = 0;
             foreach (var noteNode in measureNode.Elements("note"))
@@ -142,10 +146,9 @@ public static class MusicXml
                 }
 
                 var durationEl = noteNode.Element("duration");
-                long duration;
-                if (durationEl is not null && long.TryParse(durationEl.Value, out var parsed))
+                if (durationEl is not null)
                 {
-                    duration = (long)(parsed * importTickRate);
+                    cursorUnits += MusicXmlNumbers.PositiveInt64(durationEl.Value, path + ".duration");
                 }
                 else if (noteNode.Element("grace") is not null)
                 {
@@ -156,9 +159,12 @@ public static class MusicXml
                     throw new IllegalFileException.XmlElementNotFound("duration");
                 }
 
+                var tickOff = MusicXmlNumbers.Cursor(masterTrackResult.MeasureBorders[index], cursorUnits,
+                    divisions, path + ".duration");
+                var duration = tickOff - tickPosition;
                 if (isRest)
                 {
-                    tickPosition += duration;
+                    tickPosition = tickOff;
                     continue;
                 }
 
@@ -169,16 +175,22 @@ public static class MusicXml
                 Note note;
                 if (!isInsideNote)
                 {
-                    note = new Note(0, key, lyric, tickPosition, tickPosition + duration);
+                    if (duration == 0)
+                        throw new ProjectInputException("MUSICXML_RANGE", path + ".duration",
+                            "Note duration collapses to zero at 480 ticks per quarter note.");
+                    note = new Note(0, key, lyric, tickPosition, tickOff);
                 }
                 else
                 {
                     var lastNote = notes[^1];
-                    note = lastNote with { TickOff = lastNote.TickOff + duration };
+                    note = lastNote with
+                    {
+                        TickOff = MusicXmlNumbers.Position((Int128)lastNote.TickOff + duration, path + ".duration"),
+                    };
                     notes.RemoveAt(notes.Count - 1);
                 }
 
-                tickPosition += duration;
+                tickPosition = tickOff;
                 notes.Add(note);
 
                 var ties = noteNode.Elements("tie");
@@ -201,7 +213,7 @@ public static class MusicXml
         if (string.IsNullOrWhiteSpace(octaveText))
             throw new ProjectInputException("MUSICXML_REQUIRED", path + ".octave", "A pitch octave is required.");
         var alterEl = pitchNode.Element("alter");
-        var alter = alterEl is not null ? int.Parse(alterEl.Value) : 0;
+        var alter = alterEl is not null ? MusicXmlNumbers.Int32(alterEl.Value, path + ".alter") : 0;
         var relativeKey = step switch
         {
             "C" => 0,
@@ -211,10 +223,13 @@ public static class MusicXml
             "G" => 7,
             "A" => 9,
             "B" => 11,
-            _ => throw new InvalidOperationException(),
-        } + alter;
-        var octave = int.Parse(octaveText) + 1;
-        return octave * Constants.KeyInOctave + relativeKey;
+            _ => throw new ProjectInputException("MUSICXML_NUMBER", path + ".step", "Expected a pitch step from A through G."),
+        };
+        var octave = MusicXmlNumbers.Int32(octaveText, path + ".octave");
+        var key = ((long)octave + 1) * Constants.KeyInOctave + relativeKey + alter;
+        if (key < int.MinValue || key > int.MaxValue)
+            throw new ProjectInputException("MUSICXML_RANGE", path, "Pitch cannot be represented as an Int32 note key.");
+        return (int)key;
     }
 
     public static void GenerateFile(Project project, string filePath, IEnumerable<FeatureConfig>? features = null)
@@ -228,6 +243,7 @@ public static class MusicXml
         }
 
         var projectWithTickRateApplied = ApplyTickRate(project);
+        MusicXmlNumbers.ValidateExportAxis(projectWithTickRateApplied);
         using var archive = ZipFile.Open(filePath, ZipArchiveMode.Create);
         foreach (var track in projectWithTickRateApplied.Tracks)
         {
@@ -392,13 +408,19 @@ public static class MusicXml
     private static Project ApplyTickRate(Project project) =>
         project with
         {
-            Tempos = project.Tempos.Select(t => t with { TickPosition = (long)(t.TickPosition * DefaultTickRateCevio) }).ToList(),
-            Tracks = project.Tracks.Select(track => track with
+            Tempos = project.Tempos.Select((t, i) => t with
             {
-                Notes = track.Notes.Select(n => n with
+                TickPosition = MusicXmlNumbers.Position((Int128)t.TickPosition * DefaultTickRateCevio,
+                    $"$.tempos[{i}].tickPosition"),
+            }).ToList(),
+            Tracks = project.Tracks.Select((track, ti) => track with
+            {
+                Notes = track.Notes.Select((n, ni) => n with
                 {
-                    TickOn = (long)(n.TickOn * DefaultTickRateCevio),
-                    TickOff = (long)(n.TickOff * DefaultTickRateCevio),
+                    TickOn = MusicXmlNumbers.Position((Int128)n.TickOn * DefaultTickRateCevio,
+                        $"$.tracks[{ti}].notes[{ni}].tickOn"),
+                    TickOff = MusicXmlNumbers.Position((Int128)n.TickOff * DefaultTickRateCevio,
+                        $"$.tracks[{ti}].notes[{ni}].tickOff"),
                 }).ToList(),
             }).ToList(),
         };
@@ -416,28 +438,40 @@ public static class MusicXml
         var tickCounter = new TickCounter(ticksInFullNote: (long)(Constants.TicksInFullNote * DefaultTickRateCevio));
         var measureBorderTicks = new List<long> { 0 };
 
-        foreach (var timeSignature in timeSignatures)
+        for (var tsi = 0; tsi < timeSignatures.Count; tsi++)
         {
+            var timeSignature = timeSignatures[tsi];
             var previousMeasure = tickCounter.Measure;
             var ticksInMeasure = tickCounter.TicksInMeasure;
+            var path = $"$.timeSignatures[{tsi}]";
+            _ = MusicXmlNumbers.MeasureLength(timeSignature.Numerator, timeSignature.Denominator,
+                Constants.TicksInFullNote * DefaultTickRateCevio, path);
+            if (timeSignature.MeasurePosition < previousMeasure || timeSignature.MeasurePosition >= Array.MaxLength - 1)
+                throw new ProjectInputException("MUSICXML_RANGE", path + ".measurePosition",
+                    "Time signatures must be ordered within the representable measure axis.");
+            _ = MusicXmlNumbers.Position((Int128)tickCounter.Tick +
+                (Int128)(timeSignature.MeasurePosition - previousMeasure) * ticksInMeasure, path + ".measurePosition");
             tickCounter.GoToMeasure(timeSignature);
             var currentMeasure = tickCounter.Measure;
             for (var i = 0; i < currentMeasure - previousMeasure; i++)
-                measureBorderTicks.Add(measureBorderTicks[^1] + ticksInMeasure);
+                measureBorderTicks.Add(MusicXmlNumbers.Position((Int128)measureBorderTicks[^1] + ticksInMeasure, path));
         }
 
         var lastTick = keyTicks[^1].Tick;
-        if (lastTick >= tickCounter.Tick + tickCounter.TicksInMeasure)
+        if ((Int128)lastTick >= (Int128)tickCounter.Tick + tickCounter.TicksInMeasure)
         {
             var previousMeasure = tickCounter.Measure;
             var ticksInMeasure = tickCounter.TicksInMeasure;
-            tickCounter.GoToTick(lastTick);
+            var count = (lastTick - tickCounter.Tick) / ticksInMeasure;
+            if (count >= Array.MaxLength - previousMeasure - 1L)
+                throw new ProjectInputException("MUSICXML_RANGE", "$.tracks", "Too many measures to represent the export timeline.");
+            tickCounter.GoToMeasure(previousMeasure + (int)count);
             var currentMeasure = tickCounter.Measure;
             for (var i = 0; i < currentMeasure - previousMeasure; i++)
-                measureBorderTicks.Add(measureBorderTicks[^1] + ticksInMeasure);
+                measureBorderTicks.Add(MusicXmlNumbers.Position((Int128)measureBorderTicks[^1] + ticksInMeasure, "$.tracks"));
         }
 
-        measureBorderTicks.Add(measureBorderTicks[^1] + tickCounter.TicksInMeasure);
+        measureBorderTicks.Add(MusicXmlNumbers.Position((Int128)measureBorderTicks[^1] + tickCounter.TicksInMeasure, "$.tracks"));
 
         var keyTicksWithMeasureBorders = measureBorderTicks
             .Zip(measureBorderTicks.Skip(1))
@@ -543,7 +577,7 @@ public static class MusicXml
     private sealed record MasterTrackParseResult(
         List<Tempo> Tempos,
         List<TimeSignature> TimeSignatures,
-        double ImportTickRate,
+        long Divisions,
         List<long> MeasureBorders);
 
     private abstract class KeyTick(long tick)

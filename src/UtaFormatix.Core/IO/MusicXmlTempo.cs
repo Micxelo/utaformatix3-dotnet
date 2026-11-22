@@ -99,14 +99,7 @@ internal static class MusicXmlTempo
         tempos.Add(new Tempo((long)tick, bpm));
     }
 
-    private static decimal ReadDecimal(string text, string path)
-    {
-        const NumberStyles style = NumberStyles.AllowLeadingSign | NumberStyles.AllowDecimalPoint |
-                                   NumberStyles.AllowLeadingWhite | NumberStyles.AllowTrailingWhite;
-        if (!decimal.TryParse(text, style, CultureInfo.InvariantCulture, out var value))
-            throw new ProjectInputException("MUSICXML_NUMBER", path, "Expected a finite decimal number.");
-        return value;
-    }
+    private static decimal ReadDecimal(string text, string path) => MusicXmlNumbers.Decimal(text, path);
 
     // Keep cursor arithmetic exact until the tempo is placed on the integral tick axis.
     private readonly record struct TickFraction(BigInteger Numerator, BigInteger Denominator)
