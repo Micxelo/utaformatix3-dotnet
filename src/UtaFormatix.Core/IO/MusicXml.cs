@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.IO.Compression;
 using System.Xml.Linq;
 using UtaFormatix.Core.Exceptions;
@@ -276,12 +277,13 @@ public static class MusicXml
 
     private static List<XElement> GenerateNodesForTempo(MXmlMeasureContent.Tempo tempo)
     {
-        var soundNode = new XElement("sound", new XAttribute("tempo", tempo.Bpm.ToString()));
+        var bpm = tempo.Bpm.ToString("R", CultureInfo.InvariantCulture);
+        var soundNode = new XElement("sound", new XAttribute("tempo", bpm));
         var directionNode = new XElement("direction",
             new XElement("direction-type",
                 new XElement("metronome",
                     new XElement("beat-unit", "quarter"),
-                    new XElement("per-minute", tempo.Bpm.ToString()))),
+                    new XElement("per-minute", bpm))),
             new XElement(soundNode));
         return [soundNode, directionNode];
     }
