@@ -208,16 +208,16 @@ public static class MusicXml
         using var archive = ZipFile.Open(filePath, ZipArchiveMode.Create);
         foreach (var track in projectWithTickRateApplied.Tracks)
         {
-            var content = GenerateTrackContent(projectWithTickRateApplied, track);
+            var document = GenerateTrackDocument(projectWithTickRateApplied, track);
             var trackNameSafe = GetSafeFileName(track.Name);
             var entryName = $"{project.Name}_{track.Id + 1}_{trackNameSafe}.{Format.MusicXml.Extension}";
             var entry = archive.CreateEntry(entryName);
             using var writer = new StreamWriter(entry.Open());
-            writer.Write(content);
+            document.Save(writer);
         }
     }
 
-    private static string GenerateTrackContent(Project project, Track track)
+    private static XDocument GenerateTrackDocument(Project project, Track track)
     {
         var keyTicks = GetKeyTicks(project, track);
         var measures = GetMeasures(keyTicks, project.TimeSignatures);
@@ -235,9 +235,7 @@ public static class MusicXml
             partNode.Add(measureNode);
         }
 
-        using var writer = new StringWriter();
-        doc.Save(writer);
-        return writer.ToString();
+        return doc;
     }
 
     private static XElement GenerateMeasureNode(
